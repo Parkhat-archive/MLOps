@@ -45,12 +45,13 @@
     <summary>Настройки</summary>
     <div class="row" style="margin-top:8px">
       ИИ: <select id="provider">
-        <option value="gemini">Google Gemini (бесплатно)</option>
+        <option value="none">Без ИИ — диктовка (мгновенно, бесплатно)</option>
+        <option value="gemini">Google Gemini (бесплатно, с лимитами)</option>
         <option value="claude">Anthropic Claude (платно)</option>
       </select>
     </div>
-    <div class="row">
-      <input id="apiKey" class="grow" type="password" placeholder="API key (хранится только в этом браузере)">
+    <div class="row" id="keyRow">
+      <input id="apiKey" class="grow" type="password" data-key placeholder="API key (хранится только в этом браузере)">
     </div>
     <div class="row" id="geminiRow">
       Модель: <input id="model" class="grow" value="gemini-flash-latest">
@@ -75,6 +76,7 @@
       <button id="pause">⏸ Пауза</button>
       <button id="mic" title="Горячая клавиша: E">🎤 Править</button>
       <button id="back">✎ Текст</button>
+      <button id="undo">↶ Отменить</button>
       <button id="download">⬇ Скачать</button>
     </div>
     <div class="row">
@@ -102,17 +104,19 @@ let utter = null;
 
 // ---------- settings ----------
 const HELP = {
+  none: 'Нажмите «Править» и скажите новый вариант предложения. Вступление вроде «давай напишем так» / «пусть будет» / «скажем» вырезается автоматически. «Удали» — удалить предложение.',
   gemini: 'Бесплатный ключ: <a href="https://aistudio.google.com/apikey" target="_blank">aistudio.google.com/apikey</a>. Если модель не находится — впишите актуальную (например gemini-2.5-flash).',
   claude: 'Ключ: <a href="https://console.anthropic.com/settings/keys" target="_blank">console.anthropic.com</a> (платно).',
 };
-$("provider").value = LS.get("provider") || "gemini";
+$("provider").value = LS.get("provider") || "none";
 $("model").value = LS.get("geminiModel") || "gemini-flash-latest";
 function syncProvider() {
   const p = $("provider").value;
   $("apiKey").value = LS.get("key_" + p) || (p === "claude" ? LS.get("apiKey") || "" : "");
   $("geminiRow").hidden = p !== "gemini";
+  $("keyRow").hidden = p === "none";
   $("keyHelp").innerHTML = HELP[p];
-  if (!$("apiKey").value) $("settings").open = true;
+  if (p !== "none" && !$("apiKey").value) $("settings").open = true;
 }
 syncProvider();
 $("provider").onchange = () => { LS.set("provider", $("provider").value); syncProvider(); };
@@ -286,9 +290,42 @@ async function callClaude(key, prompt) {
   return res.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
 }
 
+// ---------- dictation mode (no AI) ----------
+// "окей, в этом предложении давай напишем по-другому, скажем мама мыла раму" -> "Мама мыла раму."
+const MARKER = /(пусть будет|пускай будет|давай напишем|давай запишем|давай скажем|давай так|напиши|напишем|запиши|замени на|поменяй на|исправь на|скажем|вот так)/i;
+const FILLER = /^(?:\s|[,.:;!?—–-]|ну|окей|ок|так|давай|хорошо|значит|вот|в этом предложении|это предложение|предложение|по-другому|по другому|иначе|лучше|следующее|следующим образом)+(?=\s|$|[,.:;—–-])/i;
+const DELETE = /^(?:ну\s+|давай\s+)?(удали|убери|удалить|убрать)(\s+(это|его|предложение|это предложение))?[.!]?$/i;
+function dictate(t) {
+  t = t.trim();
+  if (DELETE.test(t)) return "";
+  let found = false;
+  for (let k = 0; k < 3; k++) {              // peel nested intros: "давай напишем по-другому, скажем ..."
+    const m = t.slice(0, 80).match(MARKER);
+    if (!m) break;
+    t = t.slice(m.index + m[0].length);
+    t = t.replace(FILLER, "").trim();
+    found = true;
+  }
+  if (found) t = t.replace(FILLER, "");
+  t = t.replace(/^[\s,.:;—–-]+/, "").trim();
+  if (!t) return null;
+  t = t[0].toUpperCase() + t.slice(1);
+  if (!/[.!?…»"]$/.test(t)) t += ".";
+  return t;
+}
+
+// ---------- undo ----------
+const history = [];
+$("undo").onclick = () => {
+  const h = history.pop();
+  if (!h) { status("Нечего отменять."); return; }
+  stop(); sentences = h.sentences; idx = h.idx; LS.set("text", fullText()); render(); status("Отменено.");
+};
+
 async function applyEdit(i, command) {
   const key = $("apiKey").value.trim();
-  if (!key) { status("Укажите API key в настройках."); $("settings").open = true; return; }
+  const mode = $("provider").value;
+  if (mode !== "none" && !key) { status("Укажите API key в настройках."); $("settings").open = true; return; }
   status(`Правлю: «${command}»…`);
   const prompt =
 `Предыдущее предложение: ${sentences[i - 1]?.text ?? "(нет)"}
@@ -297,8 +334,10 @@ async function applyEdit(i, command) {
 
 Команда пользователя: ${command}`;
   try {
-    const out = $("provider").value === "gemini" ? await callGemini(key, prompt) : await callClaude(key, prompt);
-    if (out === null) { status("Модель отказалась выполнять эту правку."); return; }
+    const out = mode === "none" ? dictate(command)
+              : mode === "gemini" ? await callGemini(key, prompt) : await callClaude(key, prompt);
+    if (out === null) { status(mode === "none" ? "Не расслышал текст. Попробуйте ещё раз." : "Модель отказалась выполнять эту правку."); return; }
+    history.push({ sentences: sentences.map(s => ({ ...s })), idx: i });
     const replacement = split(out).map(text => ({ text, edited: true }));
     sentences.splice(i, 1, ...replacement);
     LS.set("text", fullText());
