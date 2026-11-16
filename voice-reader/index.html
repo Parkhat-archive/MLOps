@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Голосовой чтец</title>
+<style>
+  :root { --bg:#fafaf7; --fg:#1d1d1b; --muted:#77776f; --hl:#ffe9a8; --edit:#c8f0c8; --acc:#2f6fdf; --card:#fff; --bd:#ddd; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#17171a; --fg:#e8e8e3; --muted:#9a9a92; --hl:#5a4a12; --edit:#1f4d26; --acc:#6a9cff; --card:#222226; --bd:#3a3a40; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:17px/1.6 system-ui, sans-serif; }
+  main { max-width: 820px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 22px; margin: 8px 0 16px; }
+  .row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:10px; }
+  input, select, textarea, button { font: inherit; color: inherit; background: var(--card); border:1px solid var(--bd); border-radius:8px; padding:8px 10px; }
+  textarea { width:100%; min-height:180px; resize: vertical; }
+  button { cursor:pointer; }
+  button.primary { background: var(--acc); color:#fff; border-color: var(--acc); }
+  button#mic { font-size: 20px; padding: 12px 18px; }
+  button#mic.listening { background:#d33; color:#fff; border-color:#d33; animation: pulse 1s infinite; }
+  @keyframes pulse { 50% { opacity:.6; } }
+  #reader { background:var(--card); border:1px solid var(--bd); border-radius:10px; padding:16px; min-height:120px; }
+  #reader span { cursor:pointer; border-radius:4px; transition: background .2s; }
+  #reader span.cur { background: var(--hl); }
+  #reader span.edited { background: var(--edit); }
+  #status { color: var(--muted); font-size: 15px; min-height: 1.6em; }
+  details { margin-bottom: 12px; }
+  .grow { flex:1; min-width: 200px; }
+  small { color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Голосовой чтец с правкой</h1>
+
+  <details id="settings">
+    <summary>Настройки</summary>
+    <div class="row" style="margin-top:8px">
+      <input id="apiKey" class="grow" type="password" placeholder="Anthropic API key (хранится только в этом браузере)">
+    </div>
+    <div class="row">
+      Голос: <select id="voice" class="grow"></select>
+    </div>
+    <div class="row">
+      Скорость: <input id="rate" type="range" min="0.5" max="2" step="0.1" value="1"> <span id="rateVal">1.0</span>
+    </div>
+  </details>
+
+  <div id="editorView">
+    <textarea id="input" placeholder="Вставьте текст на русском…"></textarea>
+    <div class="row"><button class="primary" id="load">Готово → к чтению</button></div>
+  </div>
+
+  <div id="readerView" hidden>
+    <div class="row">
+      <button id="play" class="primary">▶ Читать</button>
+      <button id="pause">⏸ Пауза</button>
+      <button id="mic" title="Горячая клавиша: E">🎤 Править</button>
+      <button id="back">✎ Текст</button>
+      <button id="download">⬇ Скачать</button>
+    </div>
+    <div class="row">
+      <input id="typed" class="grow" placeholder="…или напишите команду правки и нажмите Enter">
+    </div>
+    <div id="status"></div>
+    <div id="reader"></div>
+    <p><small>Клик по предложению — читать с него. Кнопка «Править» (или клавиша E) ставит на паузу и слушает команду, например: «замени на …», «пусть будет …», «сделай короче», «удали это предложение».</small></p>
+  </div>
+</main>
+
+<script type="module">
+const SDK_URL = "https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@1.4.0/+esm";
+
+const $ = (id) => document.getElementById(id);
+const LS = { get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+             set(k, v) { try { localStorage.setItem(k, v); } catch {} } };
+
+// ---------- state ----------
+let sentences = [];      // [{text, edited}]
+let idx = 0;             // current sentence
+let playing = false;
+let startedAt = 0;       // when current sentence started being spoken
+let utter = null;
+
+// ---------- settings ----------
+$("apiKey").value = LS.get("apiKey") || "";
+if (!$("apiKey").value) $("settings").open = true;
+$("apiKey").onchange = () => LS.set("apiKey", $("apiKey").value.trim());
+$("rate").value = LS.get("rate") || "1";
+$("rateVal").textContent = (+$("rate").value).toFixed(1);
+$("rate").oninput = () => { $("rateVal").textContent = (+$("rate").value).toFixed(1); LS.set("rate", $("rate").value); };
+$("input").value = LS.get("text") || "";
+
+function loadVoices() {
+  const voices = speechSynthesis.getVoices().filter(v => v.lang.toLowerCase().startsWith("ru"));
+  const saved = LS.get("voice");
+  $("voice").innerHTML = voices.map(v => `<option value="${v.name}">${v.name} (${v.lang})</option>`).join("")
+    || `<option value="">Нет русских голосов в системе</option>`;
+  if (saved && voices.some(v => v.name === saved)) $("voice").value = saved;
+}
+speechSynthesis.onvoiceschanged = loadVoices; loadVoices();
+$("voice").onchange = () => LS.set("voice", $("voice").value);
+
+// ---------- sentence splitting ----------
+const seg = new Intl.Segmenter("ru", { granularity: "sentence" });
+// Intl.Segmenter breaks after abbreviations like "г." or initials — glue those back.
+const ABBR = /(?:^|[\s(])(?:г|гг|ул|д|кв|им|др|пр|см|стр|рис|т|тыс|млн|млрд|руб|коп|н|э|в|вв|акад|проф|доц|ст|пер|пл|обл|р|оз|т\.е|т\.д|т\.п|т\.к|т\.н|и\.о|[А-ЯЁA-Z])\.$/i;
+function split(t) {
+  const out = [];
+  for (const s of [...seg.segment(t)].map(s => s.segment.trim()).filter(Boolean)) {
+    if (out.length && ABBR.test(out[out.length - 1])) out[out.length - 1] += " " + s;
+    else out.push(s);
+  }
+  return out;
+}
+
+// ---------- rendering ----------
+function render() {
+  $("reader").innerHTML = "";
+  sentences.forEach((s, i) => {
+    const el = document.createElement("span");
+    el.textContent = s.text + " ";
+    if (s.edited) el.classList.add("edited");
+    if (i === idx) el.classList.add("cur");
+    el.onclick = () => { stop(); idx = i; render(); play(); };
+    $("reader").appendChild(el);
+  });
+  $("reader").children[idx]?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+const status = (t) => $("status").textContent = t;
+const fullText = () => sentences.map(s => s.text).join(" ");
+
+// ---------- TTS ----------
+function speakCurrent() {
+  if (!playing) return;
+  if (idx >= sentences.length) { playing = false; status("Конец текста."); return; }
+  render();
+  utter = new SpeechSynthesisUtterance(sentences[idx].text);
+  utter.lang = "ru-RU";
+  utter.rate = +$("rate").value;
+  const v = speechSynthesis.getVoices().find(v => v.name === $("voice").value);
+  if (v) utter.voice = v;
+  utter.onstart = () => { startedAt = performance.now(); };
+  utter.onend = () => { if (utter && playing) { idx++; speakCurrent(); } };
+  speechSynthesis.speak(utter);
+}
+function play() { if (playing) return; playing = true; speakCurrent(); }
+function stop() { playing = false; utter = null; speechSynthesis.cancel(); }
+
+$("play").onclick = play;
+$("pause").onclick = () => { stop(); status("Пауза."); };
+$("load").onclick = () => {
+  LS.set("text", $("input").value);
+  sentences = split($("input").value).map(text => ({ text, edited: false }));
+  idx = 0;
+  $("editorView").hidden = true; $("readerView").hidden = false;
+  render();
+};
+$("back").onclick = () => { stop(); $("input").value = fullText(); $("editorView").hidden = false; $("readerView").hidden = true; };
+$("download").onclick = () => {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([fullText()], { type: "text/plain" }));
+  a.download = "text.txt"; a.click();
+};
+
+// ---------- which sentence does "this" mean ----------
+// People react late: if the current sentence only just started, they mean the previous one.
+function targetIndex() {
+  const justStarted = playing && performance.now() - startedAt < 1500;
+  return justStarted && idx > 0 ? idx - 1 : Math.min(idx, sentences.length - 1);
+}
+
+// ---------- STT ----------
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let rec = null;
+function listen() {
+  if (!SR) { status("Распознавание речи не поддерживается этим браузером — используйте Chrome или поле ввода."); $("typed").focus(); return; }
+  if (rec) { rec.stop(); return; }
+  const target = targetIndex();
+  stop(); idx = target; render();
+  rec = new SR();
+  rec.lang = "ru-RU"; rec.interimResults = true; rec.continuous = false;
+  let finalText = "";
+  rec.onresult = (e) => {
+    const t = [...e.results].map(r => r[0].transcript).join("");
+    finalText = t; status("🎤 " + t);
+  };
+  rec.onerror = (e) => status("Ошибка микрофона: " + e.error);
+  rec.onend = () => {
+    $("mic").classList.remove("listening"); rec = null;
+    if (finalText.trim()) applyEdit(target, finalText.trim());
+    else status("Ничего не расслышал. Нажмите ▶ чтобы продолжить.");
+  };
+  $("mic").classList.add("listening");
+  status("Слушаю… (правим выделенное предложение)");
+  rec.start();
+}
+$("mic").onclick = listen;
+document.addEventListener("keydown", (e) => {
+  if (e.key.toLowerCase() === "e" || e.key.toLowerCase() === "у") {
+    if (document.activeElement.tagName === "INPUT" || document.activeElement.tagName === "TEXTAREA") return;
+    e.preventDefault(); listen();
+  }
+});
+$("typed").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" || !$("typed").value.trim()) return;
+  const target = targetIndex(); stop(); idx = target; render();
+  const cmd = $("typed").value.trim(); $("typed").value = "";
+  applyEdit(target, cmd);
+});
+
+// ---------- LLM edit ----------
+const SYSTEM = `Ты редактор русского текста. Тебе дают одно предложение из текста (с соседним контекстом) и голосовую команду пользователя.
+Применяй команду ТОЛЬКО к целевому предложению. Команда распознана из речи и может содержать ошибки распознавания — понимай смысл.
+Если пользователь просто диктует новый вариант («пусть будет …», «замени на …»), используй его, исправив пунктуацию и регистр.
+Если просит удалить предложение — верни пустой ответ.
+Верни ТОЛЬКО итоговый текст на месте целевого предложения: без кавычек, пояснений и комментариев.`;
+
+async function applyEdit(i, command) {
+  const key = $("apiKey").value.trim();
+  if (!key) { status("Укажите API key в настройках."); $("settings").open = true; return; }
+  status(`Правлю: «${command}»…`);
+  const prompt =
+`Предыдущее предложение: ${sentences[i - 1]?.text ?? "(нет)"}
+ЦЕЛЕВОЕ предложение: ${sentences[i].text}
+Следующее предложение: ${sentences[i + 1]?.text ?? "(нет)"}
+
+Команда пользователя: ${command}`;
+  try {
+    const { default: Anthropic } = await import(SDK_URL);
+    const client = new Anthropic({ apiKey: key, dangerouslyAllowBrowser: true });
+    const res = await client.beta.messages.create({
+      model: "claude-opus-5-5",
+      max_tokens: 16000,
+      betas: ["server-side-fallback-2026-07-01"],
+      fallbacks: "default",
+      output_config: { effort: "low" },   // fast responses; thinking can't be disabled on this model
+      system: SYSTEM,
+      messages: [{ role: "user", content: prompt }],
+    });
+    if (res.stop_reason === "refusal") { status("Модель отказалась выполнять эту правку."); return; }
+    const out = res.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
+    const replacement = split(out).map(text => ({ text, edited: true }));
+    sentences.splice(i, 1, ...replacement);
+    LS.set("text", fullText());
+    idx = Math.min(i, sentences.length - 1);
+    status(replacement.length ? `Исправлено: «${out}»` : "Предложение удалено.");
+    render();
+    if (sentences.length) play();
+  } catch (err) {
+    status("Ошибка API: " + (err?.message || err));
+  }
+}
+</script>
+</body>
+</html>
