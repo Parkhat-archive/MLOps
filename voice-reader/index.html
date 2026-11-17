@@ -17,8 +17,9 @@
   textarea { width:100%; min-height:180px; resize: vertical; }
   button { cursor:pointer; }
   button.primary { background: var(--acc); color:#fff; border-color: var(--acc); }
-  button#mic { font-size: 20px; padding: 12px 18px; }
-  button#mic.listening { background:#d33; color:#fff; border-color:#d33; animation: pulse 1s infinite; }
+  #actions { display: flex; gap: 8px; }
+  #actions button { font-size: 20px; padding: 12px 18px; }
+  #actions button.listening { background:#d33; color:#fff; border-color:#d33; animation: pulse 1s infinite; }
   @keyframes pulse { 50% { opacity:.6; } }
   #reader { background:var(--card); border:1px solid var(--bd); border-radius:10px; padding:16px; min-height:120px; }
   #reader span { cursor:pointer; border-radius:4px; transition: background .2s; }
@@ -33,7 +34,8 @@
   @media (max-width: 600px) {
     body { font-size: 19px; }
     .bar button { flex: 1; }
-    button#mic { position: fixed; left: max(16px, env(safe-area-inset-left, 0px)); right: max(16px, env(safe-area-inset-right, 0px)); bottom: calc(16px + env(safe-area-inset-bottom, 0px)); font-size: 22px; padding: 18px; z-index: 3; box-shadow: 0 4px 16px rgba(0,0,0,.3); }
+    #actions { position: fixed; left: max(16px, env(safe-area-inset-left, 0px)); right: max(16px, env(safe-area-inset-right, 0px)); bottom: calc(16px + env(safe-area-inset-bottom, 0px)); z-index: 3; display: flex; gap: 8px; }
+    #actions button { flex: 1; font-size: 20px; padding: 16px 8px; box-shadow: 0 4px 16px rgba(0,0,0,.3); }
     main { padding-bottom: 110px; }
   }
 </style>
@@ -62,6 +64,10 @@
     <div class="row">
       Голос: <select id="voice" class="grow"></select>
     </div>
+    <div class="row" id="wakeRow">
+      <label><input type="checkbox" id="wake"> Голосовые команды: «стоп», «дальше», «правка», «добавь»</label>
+      <small>Микрофон слушает всё время чтения. Лучше в наушниках: иначе он слышит сам себя.</small>
+    </div>
     <div class="row">
       Скорость: <input id="rate" type="range" min="0.5" max="2" step="0.1" value="1"> <span id="rateVal">1.0</span>
     </div>
@@ -69,24 +75,32 @@
 
   <div id="editorView">
     <textarea id="input" placeholder="Вставьте текст на русском…"></textarea>
-    <div class="row"><button class="primary" id="load">Готово → к чтению</button></div>
+    <div class="row">
+      <button class="primary" id="load">Готово → к чтению</button>
+      <button id="openFile">📄 Открыть файл (.md, .txt)</button>
+      <input type="file" id="file" accept=".md,.markdown,.txt,text/plain,text/markdown" hidden>
+    </div>
   </div>
 
   <div id="readerView" hidden>
     <div class="row bar">
       <button id="play" class="primary">▶ Читать</button>
       <button id="pause">⏸ Пауза</button>
-      <button id="mic" title="Горячая клавиша: E">🎤 Править</button>
       <button id="back">✎ Текст</button>
       <button id="undo">↶ Отменить</button>
       <button id="download">⬇ Скачать</button>
     </div>
+    <div id="actions">
+      <button id="mic" title="Горячая клавиша: E">🎤 Править</button>
+      <button id="add" title="Горячая клавиша: A">➕ Добавить</button>
+    </div>
     <div class="row">
-      <input id="typed" class="grow" placeholder="…или напишите команду правки и нажмите Enter">
+      <input id="typed" class="grow" placeholder="…или напишите текст и нажмите Enter (правка)">
+      <button id="typedAdd">➕</button>
     </div>
     <div id="status"></div>
     <div id="reader"></div>
-    <p><small>Клик по предложению — читать с него. Кнопка «Править» (на компьютере — клавиша E) ставит на паузу и слушает команду, например: «замени на …», «пусть будет …», «сделай короче», «удали это предложение».</small></p>
+    <p><small>Клик по предложению — читать с него. «Править» заменяет выделенное предложение тем, что вы скажете («пусть будет …», «удали»). «Добавить» вставляет сказанное после него. На компьютере — клавиши E и A.</small></p>
   </div>
 </main>
 
@@ -115,7 +129,8 @@ setTimeout(() => {
 }, 11000);
 
 // ---------- state ----------
-let sentences = [];      // [{text, edited}]
+let sentences = [];      // [{text, edited, p}]  p = paragraph number
+let fileName = LS.get("fileName") || "text";
 let idx = 0;             // current sentence
 let playing = false;
 let startedAt = 0;       // when current sentence started being spoken
@@ -176,27 +191,86 @@ function split(t) {
   return out;
 }
 
+// ---------- text / markdown parsing ----------
+// Markdown is turned into plain paragraphs for reading: markup goes, code blocks are skipped,
+// headings and list items become their own paragraphs.
+function mdToParagraphs(md) {
+  const out = []; let buf = []; let inCode = false;
+  const flush = () => { if (buf.length) { out.push(buf.join(" ")); buf = []; } };
+  const endDot = (t) => /[.!?…:;]$/.test(t) ? t : t + ".";
+  for (let line of md.replace(/\r/g, "").split("\n")) {
+    if (/^\s*(```|~~~)/.test(line)) { inCode = !inCode; flush(); continue; }
+    if (inCode) continue;
+    line = line
+      .replace(/<!--.*?-->/g, "").replace(/<[^>]+>/g, "")
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+      .replace(/`([^`]*)`/g, "$1")
+      .replace(/(\*\*|__)(.+?)\1/g, "$2").replace(/(^|[\s(])[*_]([^*_]+)[*_]/g, "$1$2");
+    if (/^\s*$/.test(line)) { flush(); continue; }
+    if (/^\s*([-*_]\s*){3,}$/.test(line)) { flush(); continue; }          // horizontal rule
+    if (/^\s*\|?[\s:-]+\|[\s:|-]*$/.test(line)) continue;                // table separator
+    let m;
+    if ((m = line.match(/^\s*#{1,6}\s+(.*?)\s*#*\s*$/))) { flush(); if (m[1]) out.push(endDot(m[1])); continue; }
+    if ((m = line.match(/^\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?(.*)$/))) { flush(); if (m[1].trim()) out.push(endDot(m[1].trim())); continue; }
+    line = line.replace(/^\s*>+\s?/, "");
+    if (line.includes("|")) { flush(); const cells = line.split("|").map(c => c.trim()).filter(Boolean); if (cells.length) out.push(endDot(cells.join(", "))); continue; }
+    buf.push(line.trim());
+  }
+  flush();
+  return out.filter(t => t.replace(/[.\s]/g, ""));
+}
+const textToParagraphs = (t) => t.replace(/\r/g, "").split(/\n\s*\n|\n/).map(x => x.trim()).filter(Boolean);
+function toSentences(paragraphs) {
+  const out = [];
+  paragraphs.forEach((para, p) => split(para).forEach(text => out.push({ text, edited: false, p })));
+  return out;
+}
+
 // ---------- rendering ----------
+// Full rebuild only when the text changes; moving through it just moves the highlight.
+let spans = [], curEl = null;
 function render() {
-  $("reader").innerHTML = "";
-  sentences.forEach((s, i) => {
+  const frag = document.createDocumentFragment();
+  let para = null;
+  spans = sentences.map((s, i) => {
+    if (!para || sentences[i - 1].p !== s.p) { para = document.createElement("p"); frag.appendChild(para); }
     const el = document.createElement("span");
     el.textContent = s.text + " ";
+    el.dataset.i = i;
     if (s.edited) el.classList.add("edited");
-    if (i === idx) el.classList.add("cur");
-    el.onclick = () => { stop(); idx = i; render(); play(); };
-    $("reader").appendChild(el);
+    para.appendChild(el);
+    return el;
   });
-  $("reader").children[idx]?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  $("reader").replaceChildren(frag);
+  curEl = null;
+  highlight();
 }
+function highlight() {
+  curEl?.classList.remove("cur");
+  curEl = spans[idx] || null;
+  curEl?.classList.add("cur");
+  curEl?.scrollIntoView({ block: "center", behavior: "smooth" });
+  LS.set("pos", String(idx));
+}
+$("reader").onclick = (e) => {
+  const i = e.target.dataset?.i;
+  if (i === undefined) return;
+  stop(); idx = +i; highlight(); play();
+};
 const status = (t) => $("status").textContent = t;
-const fullText = () => sentences.map(s => s.text).join(" ");
+function fullText() {
+  let out = "";
+  sentences.forEach((s, i) => { out += (i === 0 ? "" : sentences[i - 1].p !== s.p ? "\n\n" : " ") + s.text; });
+  return out;
+}
+function saveText() { LS.set("text", fullText()); }
 
 // ---------- TTS ----------
 function speakCurrent() {
   if (!playing) return;
   if (idx >= sentences.length) { playing = false; status("Конец текста."); return; }
-  render();
+  highlight();
   if (T) {                                   // claude.ai platform voice
     const my = ++ttsToken;
     startedAt = performance.now();
@@ -229,19 +303,41 @@ function stop() { playing = false; utter = null; ttsToken++; try { T?.stop(); } 
 
 $("play").onclick = play;
 $("pause").onclick = () => { stop(); status("Пауза."); };
-$("load").onclick = () => {
-  LS.set("text", $("input").value);
-  sentences = split($("input").value).map(text => ({ text, edited: false }));
-  idx = 0;
+function openReader(paragraphs, keepPos) {
+  sentences = toSentences(paragraphs);
+  if (!sentences.length) { status("Текст пустой."); return; }
+  history.length = 0;
+  const pos = +(LS.get("pos") || 0);
+  idx = keepPos && pos < sentences.length ? pos : 0;
+  saveText();
   $("editorView").hidden = true; $("readerView").hidden = false;
   render();
+  wakeStart();
+  status(`${sentences.length} предложений.` + (idx ? " Продолжаю с места, где остановились." : ""));
+}
+$("load").onclick = () => {
+  const same = $("input").value === LS.get("text");
+  openReader(textToParagraphs($("input").value), same);
 };
-$("back").onclick = () => { stop(); $("input").value = fullText(); $("editorView").hidden = false; $("readerView").hidden = true; };
+$("openFile").onclick = () => $("file").click();
+$("file").onchange = async () => {
+  const f = $("file").files[0];
+  if (!f) return;
+  const raw = await f.text();
+  fileName = f.name.replace(/\.[^.]+$/, "") || "text";
+  LS.set("fileName", fileName);
+  const isMd = /\.(md|markdown)$/i.test(f.name);
+  const paras = isMd ? mdToParagraphs(raw) : textToParagraphs(raw);
+  $("input").value = paras.join("\n\n");
+  $("file").value = "";
+  openReader(paras, false);
+};
+$("back").onclick = () => { stop(); wakeStop(); $("input").value = fullText(); LS.set("pos", String(idx)); $("editorView").hidden = false; $("readerView").hidden = true; };
 $("download").onclick = async () => {
-  if (DL) { try { await DL.save({ filename: "text.txt", data: fullText() }); } catch (e) { status("Файл не сохранён."); } return; }
+  if (DL) { try { await DL.save({ filename: fileName + ".txt", data: fullText() }); } catch (e) { status("Файл не сохранён."); } return; }
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([fullText()], { type: "text/plain" }));
-  a.download = "text.txt"; a.click();
+  a.download = fileName + ".txt"; a.click();
 };
 
 // ---------- which sentence does "this" mean ----------
@@ -255,32 +351,38 @@ function targetIndex() {
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let rec = null;
 let cdBusy = false;
-function listenPlatform() {
+let listenMode = "edit";
+const btnFor = (m) => $(m === "add" ? "add" : "mic");
+const doneFor = (m, target, text) => m === "add" ? applyAdd(target, text) : applyEdit(target, text);
+function listenPlatform(mode) {
   if (cdBusy) { CD.stop().catch(() => {}); return; }
+  listenMode = mode;
   const target = targetIndex();
-  stop(); idx = target; render();
+  stop(); idx = target; highlight();
   let finalText = "";
   cdBusy = true;
   const offs = [
     CD.onPartial(({ text }) => status("🎤 " + (finalText + " " + text).trim())),
     CD.onFinal(({ text }) => { finalText = (finalText + " " + text).trim(); status("🎤 " + finalText); }),
     CD.onState(({ state, reason }) => {
-      if (state === "listening") { $("mic").classList.add("listening"); status("Слушаю… нажмите ещё раз, когда закончите."); }
+      if (state === "listening") { btnFor(mode).classList.add("listening"); status("Слушаю… нажмите ещё раз, когда закончите."); }
       if (state !== "idle") return;
-      offs.forEach(f => f()); cdBusy = false; $("mic").classList.remove("listening");
-      if (finalText) applyEdit(target, finalText);
+      offs.forEach(f => f()); cdBusy = false; btnFor(mode).classList.remove("listening");
+      if (finalText) doneFor(mode, target, finalText);
       else if (reason === "not_granted") status("Нет доступа к микрофону — напишите команду в поле ввода.");
       else status("Ничего не расслышал. Нажмите ▶ чтобы продолжить.");
     }),
   ];
   CD.start({ language: "ru" }).catch(() => {});
 }
-function listen() {
-  if (CD) { listenPlatform(); return; }
+function listen(mode = "edit") {
+  if (CD) { listenPlatform(mode); return; }
   if (!SR) { status("Распознавание речи не поддерживается этим браузером — используйте Chrome или поле ввода."); $("typed").focus(); return; }
   if (rec) { rec.stop(); return; }
+  listenMode = mode;
   const target = targetIndex();
-  stop(); idx = target; render();
+  stop(); idx = target; highlight();
+  wakeStop();
   rec = new SR();
   rec.lang = "ru-RU"; rec.interimResults = true; rec.continuous = false;
   let finalText = "";
@@ -290,27 +392,65 @@ function listen() {
   };
   rec.onerror = (e) => status("Ошибка микрофона: " + e.error);
   rec.onend = () => {
-    $("mic").classList.remove("listening"); rec = null;
-    if (finalText.trim()) applyEdit(target, finalText.trim());
+    btnFor(mode).classList.remove("listening"); rec = null;
+    if (finalText.trim()) doneFor(mode, target, finalText.trim());
     else status("Ничего не расслышал. Нажмите ▶ чтобы продолжить.");
+    wakeStart();
   };
-  $("mic").classList.add("listening");
-  status("Слушаю… (правим выделенное предложение)");
+  btnFor(mode).classList.add("listening");
+  status(mode === "add" ? "Слушаю… что добавить после выделенного предложения" : "Слушаю… (правим выделенное предложение)");
   rec.start();
 }
-$("mic").onclick = listen;
+$("mic").onclick = () => listen("edit");
+$("add").onclick = () => listen("add");
 document.addEventListener("keydown", (e) => {
-  if (e.key.toLowerCase() === "e" || e.key.toLowerCase() === "у") {
-    if (document.activeElement.tagName === "INPUT" || document.activeElement.tagName === "TEXTAREA") return;
-    e.preventDefault(); listen();
-  }
+  if (document.activeElement.tagName === "INPUT" || document.activeElement.tagName === "TEXTAREA") return;
+  const k = e.key.toLowerCase();
+  if (k === "e" || k === "у") { e.preventDefault(); listen("edit"); }
+  if (k === "a" || k === "ф") { e.preventDefault(); listen("add"); }
 });
-$("typed").addEventListener("keydown", (e) => {
-  if (e.key !== "Enter" || !$("typed").value.trim()) return;
-  const target = targetIndex(); stop(); idx = target; render();
+function typedSubmit(mode) {
+  if (!$("typed").value.trim()) return;
+  const target = targetIndex(); stop(); idx = target; highlight();
   const cmd = $("typed").value.trim(); $("typed").value = "";
-  applyEdit(target, cmd);
-});
+  doneFor(mode, target, cmd);
+}
+$("typed").addEventListener("keydown", (e) => { if (e.key === "Enter") typedSubmit("edit"); });
+$("typedAdd").onclick = () => typedSubmit("add");
+
+// ---------- hands-free voice commands (browser speech recognition only) ----------
+// The mic hears the speaker too, so a command word that is in the sentence being read is ignored.
+let wakeOn = false, wake = null;
+const CMD = { stop: /(^|\s)(стоп|стой|пауза)(?=\s|$)/, go: /(^|\s)(дальше|продолжай|читай)(?=\s|$)/,
+              edit: /(^|\s)(правка|исправь|править)(?=\s|$)/, add: /(^|\s)(добавь|добавить|допиши)(?=\s|$)/ };
+if (!SR || window.claude?.use) $("wakeRow").hidden = true;
+$("wake").checked = LS.get("wake") === "1" && !$("wakeRow").hidden;
+wakeOn = $("wake").checked;
+$("wake").onchange = () => { wakeOn = $("wake").checked; LS.set("wake", wakeOn ? "1" : "0"); wakeOn ? wakeStart() : wakeStop(); };
+function wakeStart() {
+  if (!wakeOn || wake || rec || !SR || $("readerView").hidden) return;
+  const w = wake = new SR();
+  w.lang = "ru-RU"; w.continuous = true; w.interimResults = true;
+  w.onresult = (e) => {
+    const t = e.results[e.results.length - 1][0].transcript.toLowerCase();
+    const reading = (playing && sentences[idx]?.text.toLowerCase()) || "";
+    const heard = (re) => re.test(" " + t) && !re.test(" " + reading.replace(/[.,!?;:«»"—-]/g, " "));
+    if (heard(CMD.stop) && playing) { stop(); status("Пауза. Скажите «дальше», «правка» или «добавь»."); }
+    else if (heard(CMD.go) && !playing) { status(""); play(); }
+    else if (heard(CMD.edit) || heard(CMD.add)) {
+      const mode = heard(CMD.add) ? "add" : "edit";
+      wakeStop(); setTimeout(() => listen(mode), 300);
+    }
+  };
+  w.onerror = (e) => {
+    if (e.error === "not-allowed" || e.error === "service-not-allowed") {
+      wakeOn = false; $("wake").checked = false; status("Нет доступа к микрофону для голосовых команд.");
+    }
+  };
+  w.onend = () => { if (wake === w) wake = null; if (wakeOn && !rec) setTimeout(wakeStart, 300); };
+  try { w.start(); } catch { wake = null; }
+}
+function wakeStop() { const w = wake; wake = null; if (w) { w.onend = null; try { w.abort(); } catch {} } }
 
 // ---------- LLM edit ----------
 const SYSTEM = `Ты редактор русского текста. Тебе дают одно предложение из текста (с соседним контекстом) и голосовую команду пользователя.
@@ -359,7 +499,7 @@ async function callClaude(key, prompt) {
 
 // ---------- dictation mode (no AI) ----------
 // "окей, в этом предложении давай напишем по-другому, скажем мама мыла раму" -> "Мама мыла раму."
-const MARKER = /(пусть будет|пускай будет|давай напишем|давай запишем|давай скажем|давай так|напиши|напишем|запиши|замени на|поменяй на|исправь на|скажем|вот так)/i;
+const MARKER = /(добавь|добавить|допиши|дописать|добавим|пусть будет|пускай будет|давай напишем|давай запишем|давай скажем|давай так|напиши|напишем|запиши|замени на|поменяй на|исправь на|скажем|вот так)/i;
 const FILLER = /^(?:\s|[,.:;!?—–-]|ну|окей|ок|так|давай|хорошо|значит|вот|в этом предложении|это предложение|предложение|по-другому|по другому|иначе|лучше|следующее|следующим образом)+(?=\s|$|[,.:;—–-])/i;
 const DELETE = /^(?:ну\s+|давай\s+)?(удали|убери|удалить|убрать)(\s+(это|его|предложение|это предложение))?[.!]?$/i;
 function dictate(t) {
@@ -386,8 +526,23 @@ const history = [];
 $("undo").onclick = () => {
   const h = history.pop();
   if (!h) { status("Нечего отменять."); return; }
-  stop(); sentences = h.sentences; idx = h.idx; LS.set("text", fullText()); render(); status("Отменено.");
+  stop(); sentences = h.sentences; idx = h.idx; saveText(); render(); status("Отменено.");
 };
+
+// Insert dictated text after sentence i, then read on from the new text.
+function applyAdd(i, command) {
+  const out = dictate(command);
+  if (!out) { status("Не расслышал текст. Попробуйте ещё раз."); return; }
+  history.push({ sentences: sentences.map(s => ({ ...s })), idx: i });
+  const p = sentences[i]?.p ?? 0;
+  const added = split(out).map(text => ({ text, edited: true, p }));
+  sentences.splice(i + 1, 0, ...added);
+  saveText();
+  idx = i + 1;
+  status(`Добавлено: «${out}»`);
+  render();
+  play();
+}
 
 async function applyEdit(i, command) {
   const key = $("apiKey").value.trim();
@@ -405,9 +560,10 @@ async function applyEdit(i, command) {
               : mode === "gemini" ? await callGemini(key, prompt) : await callClaude(key, prompt);
     if (out === null) { status(mode === "none" ? "Не расслышал текст. Попробуйте ещё раз." : "Модель отказалась выполнять эту правку."); return; }
     history.push({ sentences: sentences.map(s => ({ ...s })), idx: i });
-    const replacement = split(out).map(text => ({ text, edited: true }));
+    const p = sentences[i].p;
+    const replacement = split(out).map(text => ({ text, edited: true, p }));
     sentences.splice(i, 1, ...replacement);
-    LS.set("text", fullText());
+    saveText();
     idx = Math.min(i, sentences.length - 1);
     status(replacement.length ? `Исправлено: «${out}»` : "Предложение удалено.");
     render();
