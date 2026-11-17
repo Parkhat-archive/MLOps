@@ -22,6 +22,9 @@
   .card { background: var(--card); border:1px solid var(--bd); border-radius:10px; padding:14px; margin-bottom:14px; }
   #chapters { display:flex; flex-direction:column; gap:6px; margin-bottom:10px; }
   #chapters button { text-align:left; }
+  #chapters button.dir { font-weight: 600; }
+  #chapters button:disabled { opacity: .55; cursor: default; }
+  #crumbs button { padding: 4px 8px; }
   #actions { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin-bottom: 10px; }
   #actions button { font-size: 16px; padding: 10px 4px; line-height: 1.2; }
   #actions button.listening { background:var(--flag); color:#fff; border-color:var(--flag); animation: pulse 1s infinite; }
@@ -69,9 +72,6 @@
     <div class="row">
       <input id="ghToken" class="grow" type="password" placeholder="GitHub токен (хранится только в этом браузере)" autocomplete="off">
     </div>
-    <div class="row">
-      <input id="ghFolder" class="grow" placeholder="папка с главами (пусто — корень репозитория)" autocomplete="off">
-    </div>
     <div class="row"><small>Токен: <a href="https://github.com/settings/personal-access-tokens/new" target="_blank">github.com → Fine-grained token</a> → Repository access: «Only select repositories» → ваш репозиторий книги → Permissions → Contents: «Read and write». Используйте приватный репозиторий.</small></div>
 
     <h2>Голос и правка</h2>
@@ -103,14 +103,20 @@
 
   <div id="libraryView">
     <div class="card">
-      <h2>☁ Главы на GitHub</h2>
+      <h2>☁ Книга на GitHub</h2>
       <div id="cloudOff"><small>Укажите репозиторий и токен в Настройках.</small></div>
       <div id="cloudOn" hidden>
-        <div class="row"><button id="refresh">↻ Обновить список</button></div>
+        <div class="row" id="crumbs"></div>
         <div id="chapters"></div>
         <div class="row">
-          <input id="newName" class="grow" placeholder="Название новой главы">
-          <button id="newChapter">＋ Новая глава</button>
+          <button id="uploadBtn">⬆ Загрузить файлы (.docx, .md, .txt)</button>
+          <input type="file" id="upload" multiple accept=".docx,.md,.markdown,.txt,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
+          <button id="refresh" title="Обновить">↻</button>
+        </div>
+        <div class="row">
+          <input id="newName" class="grow" placeholder="Название главы или папки">
+          <button id="newChapter">＋ Глава</button>
+          <button id="newFolder">＋ Папка</button>
         </div>
       </div>
     </div>
@@ -119,8 +125,8 @@
       <textarea id="input" placeholder="Вставьте текст на русском…"></textarea>
       <div class="row">
         <button class="primary" id="load">Читать этот текст</button>
-        <button id="openFile">📄 Открыть файл (.md, .txt)</button>
-        <input type="file" id="file" accept=".md,.markdown,.txt,text/plain,text/markdown" hidden>
+        <button id="openFile">📄 Открыть файл (.docx, .md, .txt)</button>
+        <input type="file" id="file" accept=".docx,.md,.markdown,.txt,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
       </div>
       <div class="row" id="resumeRow" hidden><button id="resume">↩ Вернуться к последнему тексту</button></div>
     </div>
@@ -529,9 +535,11 @@ $("openFile").onclick = () => $("file").click();
 $("file").onchange = async () => {
   const f = $("file").files[0];
   if (!f) return;
-  const raw = await f.text();
   $("file").value = "";
-  openDoc(raw, { source: "local", name: f.name, isMd: /\.(md|markdown)$/i.test(f.name) }, false);
+  try {
+    if (isDocx(f.name)) openDoc(await docxToMd(f), { source: "local", name: f.name.replace(/\.docx$/i, ".md"), isMd: true }, false);
+    else openDoc(await f.text(), { source: "local", name: f.name, isMd: /\.(md|markdown)$/i.test(f.name) }, false);
+  } catch (e) { libMsg("Не удалось открыть файл: " + (e?.message || e)); }
 };
 $("resume").onclick = () => {
   try { openDoc(LS.get("doc") || "", JSON.parse(LS.get("meta") || "{}"), true); } catch { libMsg("Не удалось восстановить текст."); }
@@ -556,14 +564,40 @@ $("download").onclick = async () => {
   if (meta.source !== "github") { dirty = false; persist(); renderSaveState(); }
 };
 
+// ---------- .docx -> markdown (mammoth, loaded on first use) ----------
+const MAMMOTH_URL = "https://cdn.jsdelivr.net/npm/mammoth@1.11.0/mammoth.browser.min.js";
+const isDocx = (n) => /\.docx$/i.test(n);
+let mammothLoading = null;
+function loadMammoth() {
+  if (window.mammoth) return Promise.resolve();
+  return mammothLoading ||= new Promise((ok, fail) => {
+    const sc = document.createElement("script");
+    sc.src = MAMMOTH_URL; sc.onload = ok;
+    sc.onerror = () => { mammothLoading = null; fail(new Error("не загрузился конвертер Word (нет интернета?)")); };
+    document.head.appendChild(sc);
+  });
+}
+async function docxToMd(file) {
+  await loadMammoth();
+  const r = await window.mammoth.convertToMarkdown({ arrayBuffer: await file.arrayBuffer() });
+  return r.value
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")          // drop embedded images (huge base64)
+    .replace(/<a id="[^"]*"><\/a>/g, "")               // drop bookmark anchors
+    .split("\n").map(l => /^\s*\d+\\\./.test(l) ? l : l.replace(/\\([.!()\-+#>])/g, "$1")).join("\n")   // mammoth over-escapes; keep "1\." at line start
+    .replace(/\n{3,}/g, "\n\n").trim() + "\n";
+}
+
 // =====================================================================
 // GitHub storage: each chapter is a .md file; each save is a commit.
 // =====================================================================
-const gh = () => ({ repo: $("ghRepo").value.trim().replace(/^https:\/\/github\.com\//, "").replace(/\/$/, ""), token: $("ghToken").value.trim(), folder: $("ghFolder").value.trim().replace(/^\/+|\/+$/g, "") });
+let ghPath = LS.get("ghPath") ?? (LS.get("ghFolder") || "");   // folder being browsed
+const gh = () => ({ repo: $("ghRepo").value.trim().replace(/^https:\/\/github\.com\//, "").replace(/\/$/, ""), token: $("ghToken").value.trim(), folder: ghPath });
+const joinPath = (a, b) => (a ? a + "/" : "") + b;
+const safeName = (n) => n.trim().replace(/[\\/:*?"<>|]/g, "-");
 $("ghRepo").value = LS.get("ghRepo") || "";
 $("ghToken").value = LS.get("ghToken") || "";
-$("ghFolder").value = LS.get("ghFolder") || "";
-for (const id of ["ghRepo", "ghToken", "ghFolder"]) $(id).onchange = () => { LS.set(id, $(id).value.trim()); syncCloudUI(); if (gh().repo && gh().token) listChapters(); };
+for (const id of ["ghRepo", "ghToken"]) $(id).onchange = () => { LS.set(id, $(id).value.trim()); syncCloudUI(); if (gh().repo && gh().token) listChapters(); };
+function goTo(path) { ghPath = path; LS.set("ghPath", path); listChapters(); }
 function syncCloudUI() {
   const ok = !!(gh().repo && gh().token) && !inArtifact;
   $("cloudOn").hidden = !ok; $("cloudOff").hidden = ok;
@@ -599,26 +633,93 @@ async function ghApi(path, { method = "GET", body, raw = false } = {}) {
 }
 
 let pendingOpen = null;   // second tap opens a chapter even with unsaved changes
+function renderCrumbs() {
+  const box = $("crumbs"); box.replaceChildren();
+  const parts = ghPath ? ghPath.split("/") : [];
+  const mk = (label, path) => { const b = document.createElement("button"); b.textContent = label; b.onclick = () => goTo(path); return b; };
+  box.appendChild(mk("📚 " + (gh().repo.split("/")[1] || "Книга"), ""));
+  parts.forEach((name, k) => { box.append(" / "); box.appendChild(mk(name, parts.slice(0, k + 1).join("/"))); });
+}
+const READABLE = /\.(md|markdown|txt)$/i;
+const kb = (n) => n < 1024 ? n + " Б" : n < 1048576 ? Math.round(n / 1024) + " КБ" : (n / 1048576).toFixed(1) + " МБ";
 async function listChapters() {
   const { folder } = gh();
-  libMsg("Загружаю список глав…");
+  renderCrumbs();
+  libMsg("Загружаю…");
   try {
-    const items = await ghApi(folder);
-    const files = (Array.isArray(items) ? items : []).filter(f => f.type === "file" && /\.(md|markdown|txt)$/i.test(f.name))
-      .sort((a, b) => a.name.localeCompare(b.name, "ru", { numeric: true }));
+    const items = (await ghApi(folder)).filter(f => !f.name.startsWith("."));
+    const byName = (a, b) => a.name.localeCompare(b.name, "ru", { numeric: true });
+    const dirs = items.filter(f => f.type === "dir").sort(byName);
+    const files = items.filter(f => f.type === "file").sort(byName);
     const box = $("chapters"); box.replaceChildren();
+    if (folder) {
+      const up = document.createElement("button"); up.textContent = "⬅ Назад";
+      up.onclick = () => goTo(folder.split("/").slice(0, -1).join("/")); box.appendChild(up);
+    }
+    for (const d of dirs) {
+      const b = document.createElement("button"); b.className = "dir";
+      b.textContent = "📁 " + d.name; b.onclick = () => goTo(d.path); box.appendChild(b);
+    }
     for (const f of files) {
       const b = document.createElement("button");
-      const pos = +(LS.get("pos:gh:" + f.path) || 0);
-      b.textContent = "📖 " + f.name.replace(/\.(md|markdown|txt)$/i, "") + (pos ? "  ·  остановились на " + (pos + 1) : "");
-      b.onclick = () => openChapter(f.path, f.name);
+      if (READABLE.test(f.name)) {
+        const pos = +(LS.get("pos:gh:" + f.path) || 0);
+        b.textContent = "📖 " + f.name.replace(READABLE, "") + `  ·  ${kb(f.size)}` + (pos ? `  ·  остановились на ${pos + 1}` : "");
+        b.onclick = () => openChapter(f.path, f.name);
+      } else {
+        b.textContent = `📄 ${f.name}  ·  ${kb(f.size)}  ·  не читается`;
+        b.disabled = true;
+      }
       box.appendChild(b);
     }
-    libMsg(files.length ? `Глав: ${files.length}.` : "Глав пока нет. Создайте первую.");
+    const nRead = files.filter(f => READABLE.test(f.name)).length;
+    libMsg(dirs.length + files.length ? `Папок: ${dirs.length}, файлов: ${files.length} (глав: ${nRead}).` : "Здесь пусто. Загрузите файлы или создайте главу.");
   } catch (e) {
-    libMsg(e.status === 404 && folder ? "Папка не найдена. Создайте главу — папка появится сама." : e.message);
+    libMsg(e.status === 404 && folder ? "Папка не найдена." : e.message);
+    if (e.status === 404 && folder) goTo("");
   }
 }
+
+// Upload files from the phone into the current folder; .docx becomes .md.
+async function putNew(path, content, message) {
+  const dot = path.lastIndexOf(".");
+  const base = dot > path.lastIndexOf("/") ? path.slice(0, dot) : path, ext = dot > path.lastIndexOf("/") ? path.slice(dot) : "";
+  for (let k = 1; k <= 20; k++) {
+    const p = k === 1 ? path : `${base} (${k})${ext}`;
+    try { await ghApi(p, { method: "PUT", body: { message, content: b64encode(content) } }); return p; }
+    catch (e) { if (e.status !== 422) throw e; }               // 422: file exists, try next name
+  }
+  throw new Error("слишком много файлов с таким именем");
+}
+$("uploadBtn").onclick = () => $("upload").click();
+$("upload").onchange = async () => {
+  const list = [...$("upload").files]; $("upload").value = "";
+  if (!list.length) return;
+  const done = [], failed = [];
+  for (const [k, f] of list.entries()) {
+    libMsg(`Загружаю ${k + 1} из ${list.length}: ${f.name}…`);
+    try {
+      let name = safeName(f.name), content;
+      if (isDocx(f.name)) { content = await docxToMd(f); name = name.replace(/\.docx$/i, ".md"); }
+      else if (READABLE.test(f.name)) content = (await f.text()).replace(/\r\n?/g, "\n");
+      else throw new Error("поддерживаются только .docx, .md, .txt");
+      const p = await putNew(joinPath(ghPath, name), content, `Загружен файл: ${name}`);
+      done.push(p.split("/").pop());
+    } catch (e) { failed.push(`${f.name} (${e.message})`); }
+  }
+  await listChapters();
+  libMsg((done.length ? `Загружено: ${done.join(", ")}.` : "") + (failed.length ? ` Не удалось: ${failed.join("; ")}.` : ""));
+};
+$("newFolder").onclick = async () => {
+  const name = safeName($("newName").value);
+  if (!name) { libMsg("Введите название папки."); return; }
+  const path = joinPath(ghPath, name);
+  libMsg("Создаю папку…");
+  try {
+    await ghApi(path + "/.gitkeep", { method: "PUT", body: { message: `Новая папка: ${name}`, content: "" } });
+    $("newName").value = ""; goTo(path);
+  } catch (e) { libMsg(e.status === 422 ? "Такая папка уже есть." : e.message); }
+};
 async function openChapter(path, name) {
   if (dirty && meta.source === "github" && meta.path !== path && pendingOpen !== path) {
     pendingOpen = path;
@@ -651,9 +752,7 @@ $("refresh").onclick = listChapters;
 $("newChapter").onclick = async () => {
   const name = $("newName").value.trim();
   if (!name) { libMsg("Введите название главы."); return; }
-  const { folder } = gh();
-  const file = name.replace(/[\\/:*?"<>|]/g, "-") + ".md";
-  const path = (folder ? folder + "/" : "") + file;
+  const path = joinPath(ghPath, safeName(name) + ".md");
   libMsg("Создаю главу…");
   try {
     const res = await ghApi(path, { method: "PUT", body: { message: `Новая глава: ${name}`, content: b64encode(`# ${name}\n`) } });
