@@ -6,10 +6,11 @@
 <title>Голосовой чтец</title>
 <style>
   :root { --bg:#fafaf7; --fg:#1d1d1b; --muted:#77776f; --hl:#ffe9a8; --edit:#c8f0c8; --acc:#2f6fdf; --card:#fff; --bd:#ddd; }
-  @media (prefers-color-scheme: dark) { :root { --bg:#17171a; --fg:#e8e8e3; --muted:#9a9a92; --hl:#5a4a12; --edit:#1f4d26; --acc:#6a9cff; --card:#222226; --bd:#3a3a40; } }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#17171a; --fg:#e8e8e3; --muted:#9a9a92; --hl:#5a4a12; --edit:#1f4d26; --acc:#6a9cff; --card:#222226; --bd:#3a3a40; color-scheme: dark; } }
+  :root[data-theme="dark"] { --bg:#17171a; --fg:#e8e8e3; --muted:#9a9a92; --hl:#5a4a12; --edit:#1f4d26; --acc:#6a9cff; --card:#222226; --bd:#3a3a40; color-scheme: dark; }
   * { box-sizing: border-box; }
   body { margin:0; background:var(--bg); color:var(--fg); font:17px/1.6 system-ui, sans-serif; }
-  main { max-width: 820px; margin: 0 auto; padding: 16px; }
+  main { max-width: 820px; margin: 0 auto; padding-block: 16px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
   h1 { font-size: 22px; margin: 8px 0 16px; }
   .row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:10px; }
   input, select, textarea, button { font: inherit; color: inherit; background: var(--card); border:1px solid var(--bd); border-radius:8px; padding:8px 10px; }
@@ -28,11 +29,11 @@
   .grow { flex:1; min-width: 200px; }
   small { color: var(--muted); }
   small a { color: var(--acc); }
-  .bar { position: sticky; top: 0; z-index: 2; background: var(--bg); padding: 8px 0; }
+  .bar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 2; background: var(--bg); padding: 8px 0; }
   @media (max-width: 600px) {
     body { font-size: 19px; }
     .bar button { flex: 1; }
-    button#mic { position: fixed; left: 16px; right: 16px; bottom: 16px; font-size: 22px; padding: 18px; z-index: 3; box-shadow: 0 4px 16px rgba(0,0,0,.3); }
+    button#mic { position: fixed; left: max(16px, env(safe-area-inset-left, 0px)); right: max(16px, env(safe-area-inset-right, 0px)); bottom: calc(16px + env(safe-area-inset-bottom, 0px)); font-size: 22px; padding: 18px; z-index: 3; box-shadow: 0 4px 16px rgba(0,0,0,.3); }
     main { padding-bottom: 110px; }
   }
 </style>
@@ -95,6 +96,13 @@ const $ = (id) => document.getElementById(id);
 const LS = { get(k) { try { return localStorage.getItem(k); } catch { return null; } },
              set(k, v) { try { localStorage.setItem(k, v); } catch {} } };
 
+// ---------- claude.ai platform capabilities (absent on a plain web host) ----------
+let CD = null, DL = null;
+if (window.claude?.use) {
+  window.claude.use("dictation").then(d => { CD = d; }).catch(() => {});
+  window.claude.use("downloads").then(d => { DL = d; }).catch(() => {});
+}
+
 // ---------- state ----------
 let sentences = [];      // [{text, edited}]
 let idx = 0;             // current sentence
@@ -125,7 +133,7 @@ $("model").onchange = () => LS.set("geminiModel", $("model").value.trim());
 $("rate").value = LS.get("rate") || "1";
 $("rateVal").textContent = (+$("rate").value).toFixed(1);
 $("rate").oninput = () => { $("rateVal").textContent = (+$("rate").value).toFixed(1); LS.set("rate", $("rate").value); };
-$("input").value = LS.get("text") || "";
+$("input").value = LS.get("text") || "Пример текста: замените его своим. Утро выдалось тихим и туманным. Мы вышли из дома рано, когда улицы ещё спали. Через час туман рассеялся, и город наполнился звуками.";
 
 function loadVoices() {
   const voices = speechSynthesis.getVoices().filter(v => v.lang.toLowerCase().startsWith("ru"));
@@ -193,7 +201,8 @@ $("load").onclick = () => {
   render();
 };
 $("back").onclick = () => { stop(); $("input").value = fullText(); $("editorView").hidden = false; $("readerView").hidden = true; };
-$("download").onclick = () => {
+$("download").onclick = async () => {
+  if (DL) { try { await DL.save({ filename: "text.txt", data: fullText() }); } catch (e) { status("Файл не сохранён."); } return; }
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([fullText()], { type: "text/plain" }));
   a.download = "text.txt"; a.click();
@@ -209,7 +218,29 @@ function targetIndex() {
 // ---------- STT ----------
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let rec = null;
+let cdBusy = false;
+function listenPlatform() {
+  if (cdBusy) { CD.stop().catch(() => {}); return; }
+  const target = targetIndex();
+  stop(); idx = target; render();
+  let finalText = "";
+  cdBusy = true;
+  const offs = [
+    CD.onPartial(({ text }) => status("🎤 " + (finalText + " " + text).trim())),
+    CD.onFinal(({ text }) => { finalText = (finalText + " " + text).trim(); status("🎤 " + finalText); }),
+    CD.onState(({ state, reason }) => {
+      if (state === "listening") { $("mic").classList.add("listening"); status("Слушаю… нажмите ещё раз, когда закончите."); }
+      if (state !== "idle") return;
+      offs.forEach(f => f()); cdBusy = false; $("mic").classList.remove("listening");
+      if (finalText) applyEdit(target, finalText);
+      else if (reason === "not_granted") status("Нет доступа к микрофону — напишите команду в поле ввода.");
+      else status("Ничего не расслышал. Нажмите ▶ чтобы продолжить.");
+    }),
+  ];
+  CD.start({ language: "ru" }).catch(() => {});
+}
 function listen() {
+  if (CD) { listenPlatform(); return; }
   if (!SR) { status("Распознавание речи не поддерживается этим браузером — используйте Chrome или поле ввода."); $("typed").focus(); return; }
   if (rec) { rec.stop(); return; }
   const target = targetIndex();
