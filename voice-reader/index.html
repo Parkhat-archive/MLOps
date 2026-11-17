@@ -58,6 +58,7 @@
       Модель: <input id="model" class="grow" value="gemini-flash-latest">
     </div>
     <div class="row"><small id="keyHelp"></small></div>
+    <div class="row"><small id="diag">Диагностика…</small></div>
     <div class="row">
       Голос: <select id="voice" class="grow"></select>
     </div>
@@ -103,6 +104,15 @@ if (window.claude?.use) {
   window.claude.use("dictation").then(d => { CD = d; }).catch(() => {});
   window.claude.use("downloads").then(d => { DL = d; }).catch(() => {});
 }
+
+// ---------- diagnostics ----------
+setTimeout(() => {
+  const all = (window.speechSynthesis?.getVoices() || []);
+  const ru = all.filter(v => v.lang.toLowerCase().startsWith("ru")).length;
+  $("diag").textContent = `Диагностика: голос Claude — ${T ? "есть" : "нет"}; диктовка Claude — ${CD ? "есть" : "нет"}; `
+    + `платформа claude.ai — ${window.claude?.use ? "да" : "нет"}; системных голосов — ${all.length} (рус. ${ru}); `
+    + `распознавание браузера — ${SR ? "есть" : "нет"}; ${navigator.userAgent}`;
+}, 11000);
 
 // ---------- state ----------
 let sentences = [];      // [{text, edited}]
