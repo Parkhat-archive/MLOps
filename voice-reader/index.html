@@ -97,8 +97,9 @@ const LS = { get(k) { try { return localStorage.getItem(k); } catch { return nul
              set(k, v) { try { localStorage.setItem(k, v); } catch {} } };
 
 // ---------- claude.ai platform capabilities (absent on a plain web host) ----------
-let CD = null, DL = null;
+let CD = null, DL = null, T = null;
 if (window.claude?.use) {
+  window.claude.use("tts").then(t => { T = t; loadVoices(); }).catch(() => {});
   window.claude.use("dictation").then(d => { CD = d; }).catch(() => {});
   window.claude.use("downloads").then(d => { DL = d; }).catch(() => {});
 }
@@ -135,7 +136,14 @@ $("rateVal").textContent = (+$("rate").value).toFixed(1);
 $("rate").oninput = () => { $("rateVal").textContent = (+$("rate").value).toFixed(1); LS.set("rate", $("rate").value); };
 $("input").value = LS.get("text") || "Пример текста: замените его своим. Утро выдалось тихим и туманным. Мы вышли из дома рано, когда улицы ещё спали. Через час туман рассеялся, и город наполнился звуками.";
 
+const CLAUDE_VOICES = { buttery: "Мягкий", airy: "Лёгкий", glassy: "Звонкий", rounded: "Округлый" };
 function loadVoices() {
+  if (T) {
+    const saved = LS.get("cvoice");
+    $("voice").innerHTML = Object.entries(CLAUDE_VOICES).map(([k, n]) => `<option value="${k}">Claude: ${n}</option>`).join("");
+    if (saved && CLAUDE_VOICES[saved]) $("voice").value = saved;
+    return;
+  }
   const voices = speechSynthesis.getVoices().filter(v => v.lang.toLowerCase().startsWith("ru"));
   const saved = LS.get("voice");
   $("voice").innerHTML = voices.map(v => `<option value="${v.name}">${v.name} (${v.lang})</option>`).join("")
@@ -143,7 +151,7 @@ function loadVoices() {
   if (saved && voices.some(v => v.name === saved)) $("voice").value = saved;
 }
 speechSynthesis.onvoiceschanged = loadVoices; loadVoices();
-$("voice").onchange = () => LS.set("voice", $("voice").value);
+$("voice").onchange = () => LS.set(T ? "cvoice" : "voice", $("voice").value);
 
 // ---------- sentence splitting ----------
 const seg = new Intl.Segmenter("ru", { granularity: "sentence" });
@@ -179,6 +187,23 @@ function speakCurrent() {
   if (!playing) return;
   if (idx >= sentences.length) { playing = false; status("Конец текста."); return; }
   render();
+  if (T) {                                   // claude.ai platform voice
+    const my = ++ttsToken;
+    startedAt = performance.now();
+    const rate = Math.min(1.5, Math.max(0.7, +$("rate").value));
+    T.speak(sentences[idx].text, { language: "ru", voice: $("voice").value || "buttery", rate })
+      .then(() => { if (my === ttsToken && playing) { idx++; speakCurrent(); } })
+      .catch((e) => {
+        if (my !== ttsToken || !playing) return;
+        playing = false;
+        status(e?.code === "rate_limited" ? "Слишком много запросов к озвучке, подождите и нажмите ▶."
+             : e?.code === "not_granted" ? "Озвучка отключена в разрешениях этой страницы."
+             : "Ошибка озвучки: " + (e?.code || e));
+      });
+    return;
+  }
+  if (!speechSynthesis.getVoices().some(v => v.lang.toLowerCase().startsWith("ru")))
+    setTimeout(() => { if (playing && !speechSynthesis.speaking) status("Системный голос не отвечает: установите русский язык в настройках синтеза речи телефона."); }, 3000);
   utter = new SpeechSynthesisUtterance(sentences[idx].text);
   utter.lang = "ru-RU";
   utter.rate = +$("rate").value;
@@ -189,7 +214,8 @@ function speakCurrent() {
   speechSynthesis.speak(utter);
 }
 function play() { if (playing) return; playing = true; speakCurrent(); }
-function stop() { playing = false; utter = null; speechSynthesis.cancel(); }
+let ttsToken = 0;
+function stop() { playing = false; utter = null; ttsToken++; try { T?.stop(); } catch {} speechSynthesis.cancel(); }
 
 $("play").onclick = play;
 $("pause").onclick = () => { stop(); status("Пауза."); };
