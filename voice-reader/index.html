@@ -20,7 +20,12 @@
   button:focus-visible, input:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
   button.primary { background: var(--acc); color:#fff; border-color: var(--acc); }
   .card { background: var(--card); border:1px solid var(--bd); border-radius:10px; padding:14px; margin-bottom:14px; }
-  #chapters { display:flex; flex-direction:column; gap:6px; margin-bottom:10px; }
+  #chapters, .list { display:flex; flex-direction:column; gap:6px; margin-bottom:10px; }
+  .list .item, #versionsPanel .item { display:flex; gap:8px; align-items:center; }
+  .list .item > button:first-child { flex:1; min-width:0; text-align:left; }
+  #versionsPanel .item { padding:6px 0; border-bottom:1px solid var(--bd); }
+  #versionsPanel .item .txt { flex:1; min-width:0; }
+  #versionsPanel .item .q { color: var(--muted); font-size: 14px; }
   #chapters button { text-align:left; }
   #chapters button.dir { font-weight: 600; }
   #chapters button:disabled { opacity: .55; cursor: default; }
@@ -121,14 +126,23 @@
       </div>
     </div>
     <div class="card">
-      <h2>Без облака</h2>
+      <h2>📱 На телефоне</h2>
+      <div id="localDocs" class="list"></div>
+      <div class="row">
+        <button id="backup">⬇ Резервная копия всего</button>
+        <button id="restoreBtn">⬆ Восстановить из копии</button>
+        <input type="file" id="restoreFile" accept=".json,application/json" hidden>
+      </div>
+      <small>Тексты и все версии хранятся в памяти браузера на этом телефоне и работают без интернета. Очистка данных браузера их удалит, поэтому иногда делайте резервную копию или храните книгу в GitHub.</small>
+    </div>
+    <div class="card">
+      <h2>Новый текст</h2>
       <textarea id="input" placeholder="Вставьте текст на русском…"></textarea>
       <div class="row">
         <button class="primary" id="load">Читать этот текст</button>
         <button id="openFile">📄 Открыть файл (.docx, .md, .txt)</button>
         <input type="file" id="file" accept=".docx,.md,.markdown,.txt,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
       </div>
-      <div class="row" id="resumeRow" hidden><button id="resume">↩ Вернуться к последнему тексту</button></div>
     </div>
     <div id="libStatus" class="row"><small id="libMsg"></small></div>
   </div>
@@ -137,10 +151,11 @@
     <div class="row bar">
       <button id="play" class="primary">▶ Читать</button>
       <button id="pause">⏸ Пауза</button>
-      <button id="save" hidden>☁ Сохранить</button>
+      <button id="save">💾 Сохранить</button>
       <button id="back">☰ Главы</button>
       <button id="undo">↶ Отменить</button>
       <button id="notesBtn">📋 Заметки</button>
+      <button id="versionsBtn">🕘 Версии</button>
       <button id="download">⬇ Скачать</button>
     </div>
     <div class="row"><strong id="docTitle"></strong> <span id="saveState"></span></div>
@@ -162,6 +177,7 @@
       <button id="typedGo">OK</button>
     </div>
     <div id="notesPanel" class="card" hidden></div>
+    <div id="versionsPanel" class="card" hidden></div>
     <div id="status"></div>
     <div id="reader"></div>
     <p><small>Клик по предложению — читать с него. «Правка» заменяет выделенное предложение тем, что вы скажете («пусть будет …», «удали»). «Фраза» вставляет сказанное после него, «Абзац» — новым абзацем. «Заметка» прикрепляет к предложению комментарий, текст не меняется. «Флажок» отмечает место, чтобы вернуться позже. Заметки и флажки хранятся в самом .md-файле как скрытые комментарии.</small></p>
@@ -323,47 +339,214 @@ function serialize() {
   return out;
 }
 
-// ---------- persistence: local copy of the open document ----------
-function persist() {
-  const ok = LS.set("doc", serialize()) && LS.set("meta", JSON.stringify({ ...meta, dirty }));
-  if (!ok) status("⚠ Текст слишком большой для памяти браузера — сохраните в облако или скачайте файл.");
-  LS.set("pos:" + docKey(), String(idx));
+// =====================================================================
+// Phone storage (IndexedDB). "docs" keeps the working copy of every text
+// (saved automatically after each change); "versions" keeps snapshots made
+// on open, on every save, and before a restore.
+// =====================================================================
+const idb = new Promise((ok, fail) => {
+  if (!window.indexedDB) { fail(new Error("браузер не даёт локальное хранилище")); return; }
+  const r = indexedDB.open("voice-reader", 1);
+  r.onupgradeneeded = () => {
+    const d = r.result;
+    d.createObjectStore("docs", { keyPath: "id" });
+    d.createObjectStore("versions", { keyPath: "vid", autoIncrement: true }).createIndex("docId", "docId");
+  };
+  r.onsuccess = () => ok(r.result);
+  r.onerror = () => fail(r.error);
+});
+idb.catch(() => {});
+function dbReq(store, mode, fn) {
+  return idb.then(d => new Promise((ok, fail) => {
+    const t = d.transaction(store, mode); const r = fn(t.objectStore(store));
+    t.oncomplete = () => ok(r?.result); t.onerror = () => fail(t.error); t.onabort = () => fail(t.error || new Error("нет места в памяти телефона"));
+  }));
 }
-const docKey = () => meta.source === "github" ? "gh:" + meta.path : "local";
+const dbGet = (st, k) => dbReq(st, "readonly", s => s.get(k));
+const dbPut = (st, v) => dbReq(st, "readwrite", s => s.put(v));
+const dbAll = (st) => dbReq(st, "readonly", s => s.getAll());
+const versionsOf = (id) => dbReq("versions", "readonly", s => s.index("docId").getAll(id));
+const countVersions = (id) => dbReq("versions", "readonly", s => s.index("docId").count(id));
+async function deleteDoc(id) {
+  const vs = await versionsOf(id);
+  await dbReq("versions", "readwrite", s => { vs.forEach(v => s.delete(v.vid)); });
+  await dbReq("docs", "readwrite", s => s.delete(id));
+  try { localStorage.removeItem("pos:" + id); } catch {}
+}
+let persistAsked = false;
+function askPersist() { if (!persistAsked) { persistAsked = true; navigator.storage?.persist?.().catch(() => {}); } }
+
+const MAX_VERSIONS = 50;
+async function addVersionFor(docId, text, label) {
+  const vs = (await versionsOf(docId)).sort((a, b) => a.at - b.at);
+  if (vs.length && vs[vs.length - 1].text === text) return false;      // nothing new
+  await dbPut("versions", { docId, text, at: Date.now(), label });
+  const extra = vs.length + 1 - MAX_VERSIONS;
+  if (extra > 0) await dbReq("versions", "readwrite", s => { vs.slice(0, extra).forEach(v => s.delete(v.vid)); });
+  askPersist();
+  return true;
+}
+const addVersion = (label) => addVersionFor(meta.id, serialize(), label);
+
+let saveTimer = null;
+function workingCopy() {
+  return { id: meta.id, name: meta.name, source: meta.source, path: meta.path, sha: meta.sha, repo: meta.repo || "",
+           isMd: meta.isMd, text: serialize(), dirty, updated: Date.now() };
+}
+function saveWorking() {
+  clearTimeout(saveTimer); saveTimer = null;
+  if (!meta.id) return Promise.resolve();
+  return dbPut("docs", workingCopy()).catch(e => status("⚠ Не удалось сохранить в память телефона: " + (e?.message || e) + ". Скачайте файл (⬇)."));
+}
+function persist() {
+  if (!meta.id) return;
+  LS.set("pos:" + meta.id, String(idx));
+  LS.set("lastDoc", meta.id);
+  clearTimeout(saveTimer); saveTimer = setTimeout(saveWorking, 400);
+}
+document.addEventListener("visibilitychange", () => { if (document.hidden && saveTimer) saveWorking(); });
 function markDirty() { dirty = true; persist(); renderSaveState(); }
 function renderSaveState() {
   const st = $("saveState");
-  if (meta.source === "github") {
-    st.textContent = dirty ? "● есть несохранённые правки" : "✓ сохранено в GitHub";
-    st.className = dirty ? "dirty" : "";
-  } else {
-    st.textContent = dirty ? "● правки только в этом браузере — скачайте файл" : "";
-    st.className = dirty ? "dirty" : "";
-  }
+  st.textContent = meta.source === "github"
+    ? (dirty ? "● не сохранено в GitHub (копия есть на телефоне)" : "✓ сохранено в GitHub и на телефоне")
+    : (dirty ? "● изменено после последней версии" : "✓ версия сохранена на телефоне");
+  st.className = dirty ? "dirty" : "";
 }
-window.addEventListener("beforeunload", (e) => { if (dirty && meta.source === "github") { e.preventDefault(); e.returnValue = ""; } });
+window.addEventListener("beforeunload", (e) => {
+  if (saveTimer) saveWorking();
+  if (dirty && meta.source === "github") { e.preventDefault(); e.returnValue = ""; }
+});
+const newLocalId = () => "local:" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+const ghId = (path) => "gh:" + gh().repo + ":" + path;
 
 // ---------- open a document ----------
-function openDoc(text, m, keepPos = true) {
+function openDoc(text, m, keepPos = true, note = "") {
   stop();
-  meta = { source: "local", name: "Текст", isMd: false, path: "", sha: "", ...m };
+  if (saveTimer) saveWorking();                 // flush the previous text first
+  meta = { source: "local", name: "Текст", isMd: false, path: "", sha: "", repo: "", ...m };
+  if (!meta.id) meta.id = meta.source === "github" ? ghId(meta.path) : newLocalId();
+  if (meta.source === "github" && !meta.repo) meta.repo = gh().repo;
   doc = parseDoc(text, meta.isMd);
   buildSentences();
   history.length = 0;
   dirty = !!m.dirty;
-  const pos = +(LS.get("pos:" + docKey()) || 0);
+  const pos = +(LS.get("pos:" + meta.id) || 0);
   idx = keepPos && pos < sentences.length ? pos : 0;
-  persist();
+  persist(); saveWorking();
+  countVersions(meta.id).then(n => { if (!n) addVersionFor(meta.id, text, "исходный текст"); }).catch(() => {});
   $("libraryView").hidden = true; $("readerView").hidden = false;
   $("docTitle").textContent = meta.name;
-  $("save").hidden = meta.source !== "github";
-  $("notesPanel").hidden = true;
+  $("save").textContent = meta.source === "github" ? "☁ Сохранить" : "💾 Сохранить";
+  $("notesPanel").hidden = true; $("versionsPanel").hidden = true;
   render(); renderSaveState(); wakeStart();
   const nNotes = sentences.reduce((a, s) => a + s.notes.length + (s.flag ? 1 : 0), 0);
-  status(sentences.length
+  status((note ? note + " " : "") + (sentences.length
     ? `${sentences.length} предложений${nNotes ? `, заметок и флажков: ${nNotes}` : ""}.` + (idx ? " Продолжаю с места, где остановились." : "")
-    : "Пустой текст: нажмите «Абзац», чтобы надиктовать первый.");
+    : "Пустой текст: нажмите «Абзац», чтобы надиктовать первый."));
 }
+
+// ---------- versions panel ----------
+const fmtDate = (t) => new Date(t).toLocaleString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+const words = (t) => (t.match(/[\p{L}\p{N}]+/gu) || []).length;
+function downloadText(name, data) {
+  if (DL) return DL.save({ filename: name, data }).catch(() => status("Файл не сохранён."));
+  const url = URL.createObjectURL(new Blob([data], { type: /\.json$/.test(name) ? "application/json" : "text/plain" }));
+  const a = document.createElement("a");
+  a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+const baseName = () => meta.name.replace(/\.[^.]+$/, "");
+const ext = () => meta.isMd ? ".md" : ".txt";
+async function renderVersions() {
+  const panel = $("versionsPanel");
+  let vs;
+  try { vs = (await versionsOf(meta.id)).sort((a, b) => b.at - a.at); }
+  catch (e) { panel.textContent = "Хранилище телефона недоступно: " + (e?.message || e); return; }
+  const cur = serialize(), curWords = words(cur);
+  panel.replaceChildren();
+  const h = document.createElement("h2"); h.textContent = `Версии на телефоне (${vs.length})`; panel.appendChild(h);
+  const hint = document.createElement("small");
+  hint.textContent = `Версия создаётся при открытии, при каждом «Сохранить» и перед восстановлением старой. Хранятся последние ${MAX_VERSIONS}.`;
+  panel.appendChild(hint);
+  for (const v of vs) {
+    const row = document.createElement("div"); row.className = "item";
+    const txt = document.createElement("div"); txt.className = "txt";
+    const a = document.createElement("div"); a.textContent = `${fmtDate(v.at)} · ${v.label}`;
+    const q = document.createElement("div"); q.className = "q";
+    const w = words(v.text), dw = w - curWords;
+    q.textContent = `${w} слов` + (v.text === cur ? " · совпадает с текущим" : dw ? ` · ${dw > 0 ? "+" : ""}${dw} к текущему` : " · отличается от текущего");
+    txt.append(a, q);
+    const open = document.createElement("button"); open.textContent = "Открыть";
+    open.onclick = () => restoreVersion(v);
+    const dl = document.createElement("button"); dl.textContent = "⬇"; dl.title = "Скачать эту версию";
+    dl.onclick = () => downloadText(`${baseName()} ${new Date(v.at).toISOString().slice(0, 16).replace("T", " ").replace(":", "-")}${ext()}`, v.text);
+    row.append(txt, open, dl); panel.appendChild(row);
+  }
+}
+async function restoreVersion(v) {
+  if (serialize() !== v.text) await addVersion("перед восстановлением");
+  openDoc(v.text, { ...meta, dirty: true }, true,
+    `Открыта версия от ${fmtDate(v.at)}. Нажмите «${meta.source === "github" ? "☁ Сохранить" : "💾 Сохранить"}», чтобы закрепить её.`);
+}
+$("versionsBtn").onclick = () => {
+  const p = $("versionsPanel"); p.hidden = !p.hidden;
+  if (!p.hidden) { $("notesPanel").hidden = true; renderVersions(); }
+};
+
+// ---------- library: texts on the phone ----------
+let pendingDelete = null;
+async function renderLocalDocs() {
+  const box = $("localDocs");
+  let docs;
+  try { docs = (await dbAll("docs")).sort((a, b) => b.updated - a.updated); }
+  catch (e) { box.textContent = "Хранилище телефона недоступно: " + (e?.message || e); return; }
+  box.replaceChildren();
+  if (!docs.length) { const p = document.createElement("small"); p.textContent = "Пока пусто. Откройте файл, вставьте текст или откройте главу из GitHub."; box.appendChild(p); return; }
+  for (const d of docs) {
+    const n = await countVersions(d.id).catch(() => 0);
+    const row = document.createElement("div"); row.className = "item";
+    const b = document.createElement("button");
+    b.textContent = `${d.source === "github" ? "☁" : "📱"} ${d.name}  ·  ${fmtDate(d.updated)}  ·  версий: ${n}` + (d.dirty ? (d.source === "github" ? "  ·  ● не в GitHub" : "  ·  ● есть правки") : "");
+    b.onclick = () => openDoc(d.text, { ...d }, true,
+      d.source === "github" ? "Копия с телефона. Если глава менялась на компьютере, откройте её из списка GitHub." : "");
+    const del = document.createElement("button"); del.textContent = "✕"; del.title = "Удалить с телефона";
+    del.onclick = async () => {
+      if (pendingDelete !== d.id) { pendingDelete = d.id; libMsg(`Нажмите ✕ ещё раз, чтобы удалить «${d.name}» и все его версии с телефона` + (d.source === "github" ? " (в GitHub глава останется)." : ".")); return; }
+      pendingDelete = null; await deleteDoc(d.id); libMsg(`«${d.name}» удалён с телефона.`); renderLocalDocs();
+    };
+    row.append(b, del); box.appendChild(row);
+  }
+}
+
+// ---------- backup of everything on the phone ----------
+$("backup").onclick = async () => {
+  try {
+    const data = { app: "voice-reader", format: 1, at: new Date().toISOString(), docs: await dbAll("docs"), versions: await dbAll("versions") };
+    downloadText(`voice-reader-backup-${data.at.slice(0, 10)}.json`, JSON.stringify(data));
+    libMsg(`В копии текстов: ${data.docs.length}, версий: ${data.versions.length}.`);
+  } catch (e) { libMsg("Не удалось сделать копию: " + (e?.message || e)); }
+};
+$("restoreBtn").onclick = () => $("restoreFile").click();
+$("restoreFile").onchange = async () => {
+  const f = $("restoreFile").files[0]; $("restoreFile").value = "";
+  if (!f) return;
+  try {
+    const data = JSON.parse(await f.text());
+    if (data.app !== "voice-reader" || !Array.isArray(data.docs)) throw new Error("это не резервная копия этого приложения");
+    let nd = 0, nv = 0;
+    for (const d of data.docs) {
+      const cur = await dbGet("docs", d.id);
+      if (!cur || (d.updated || 0) > (cur.updated || 0)) { await dbPut("docs", d); nd++; }
+    }
+    for (const v of data.versions || []) {
+      const have = await versionsOf(v.docId);
+      if (!have.some(x => x.at === v.at && x.text === v.text)) { const { vid, ...rest } = v; await dbPut("versions", rest); nv++; }
+    }
+    libMsg(`Восстановлено текстов: ${nd}, версий: ${nv}.`);
+    renderLocalDocs();
+  } catch (e) { libMsg("Не удалось восстановить: " + (e?.message || e)); }
+};
 
 // ---------- rendering ----------
 let spans = [], curEl = null;
@@ -399,7 +582,7 @@ function highlight() {
   curEl = spans[idx] || null;
   curEl?.classList.add("cur");
   curEl?.scrollIntoView({ block: "center", behavior: "smooth" });
-  LS.set("pos:" + docKey(), String(idx));
+  LS.set("pos:" + meta.id, String(idx));
 }
 $("reader").onclick = (e) => {
   const n = e.target.dataset?.n;
@@ -437,7 +620,7 @@ function renderNotes() {
     row.append(txt, del); panel.appendChild(row);
   }
 }
-$("notesBtn").onclick = () => { $("notesPanel").hidden = !$("notesPanel").hidden; if (!$("notesPanel").hidden) renderNotes(); };
+$("notesBtn").onclick = () => { $("notesPanel").hidden = !$("notesPanel").hidden; if (!$("notesPanel").hidden) { $("versionsPanel").hidden = true; renderNotes(); } };
 
 // ---------- settings ----------
 const HELP = {
@@ -541,28 +724,16 @@ $("file").onchange = async () => {
     else openDoc(await f.text(), { source: "local", name: f.name, isMd: /\.(md|markdown)$/i.test(f.name) }, false);
   } catch (e) { libMsg("Не удалось открыть файл: " + (e?.message || e)); }
 };
-$("resume").onclick = () => {
-  try { openDoc(LS.get("doc") || "", JSON.parse(LS.get("meta") || "{}"), true); } catch { libMsg("Не удалось восстановить текст."); }
-};
 function showLibrary() {
   stop(); wakeStop();
+  if (saveTimer) saveWorking();
   $("readerView").hidden = true; $("libraryView").hidden = false;
-  $("resumeRow").hidden = !LS.get("doc");
   syncCloudUI();
-  if (dirty) libMsg(meta.source === "github"
-    ? `⚠ В «${meta.name}» есть несохранённые правки. Они сохранены в браузере: «Вернуться к последнему тексту».`
-    : "Правки последнего текста сохранены только в этом браузере.");
+  renderLocalDocs();
+  libMsg(dirty && meta.source === "github" ? `В «${meta.name}» есть правки, не отправленные в GitHub. Они сохранены на телефоне.` : "");
 }
 $("back").onclick = showLibrary;
-$("download").onclick = async () => {
-  const name = meta.name.replace(/\.[^.]+$/, "") + (meta.isMd ? ".md" : ".txt");
-  const data = serialize();
-  if (DL) { try { await DL.save({ filename: name, data }); if (meta.source !== "github") { dirty = false; persist(); renderSaveState(); } } catch { status("Файл не сохранён."); } return; }
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(new Blob([data], { type: "text/plain" }));
-  a.download = name; a.click();
-  if (meta.source !== "github") { dirty = false; persist(); renderSaveState(); }
-};
+$("download").onclick = () => downloadText(baseName() + ext(), serialize());
 
 // ---------- .docx -> markdown (mammoth, loaded on first use) ----------
 const MAMMOTH_URL = "https://cdn.jsdelivr.net/npm/mammoth@1.11.0/mammoth.browser.min.js";
@@ -632,7 +803,6 @@ async function ghApi(path, { method = "GET", body, raw = false } = {}) {
   throw e;
 }
 
-let pendingOpen = null;   // second tap opens a chapter even with unsaved changes
 function renderCrumbs() {
   const box = $("crumbs"); box.replaceChildren();
   const parts = ghPath ? ghPath.split("/") : [];
@@ -663,7 +833,7 @@ async function listChapters() {
     for (const f of files) {
       const b = document.createElement("button");
       if (READABLE.test(f.name)) {
-        const pos = +(LS.get("pos:gh:" + f.path) || 0);
+        const pos = +(LS.get("pos:" + ghId(f.path)) || 0);
         b.textContent = "📖 " + f.name.replace(READABLE, "") + `  ·  ${kb(f.size)}` + (pos ? `  ·  остановились на ${pos + 1}` : "");
         b.onclick = () => openChapter(f.path, f.name);
       } else {
@@ -721,17 +891,27 @@ $("newFolder").onclick = async () => {
   } catch (e) { libMsg(e.status === 422 ? "Такая папка уже есть." : e.message); }
 };
 async function openChapter(path, name) {
-  if (dirty && meta.source === "github" && meta.path !== path && pendingOpen !== path) {
-    pendingOpen = path;
-    libMsg(`⚠ В «${meta.name}» есть несохранённые правки. Нажмите «${name}» ещё раз, чтобы открыть без сохранения, или вернитесь и сохраните.`);
-    return;
-  }
-  pendingOpen = null;
   libMsg("Открываю…");
+  const id = ghId(path);
+  const local = await dbGet("docs", id).catch(() => null);
+  let f;
+  try { f = await ghApi(path); }
+  catch (e) {
+    if (local && !e.status) { openDoc(local.text, { ...local }, true, "Нет связи с GitHub — открыта копия с телефона."); libMsg(""); return; }
+    libMsg(e.message); return;
+  }
   try {
-    const f = await ghApi(path);
+    if (local?.dirty && local.sha === f.sha) {
+      openDoc(local.text, { ...local }, true, "Открыта ваша версия с телефона с правками, ещё не отправленными в GitHub.");
+      libMsg(""); return;
+    }
+    let note = "";
+    if (local?.dirty) {                       // GitHub changed meanwhile: keep the phone edits as a version
+      await addVersionFor(id, local.text, "правки с телефона до обновления из GitHub");
+      note = "Глава изменилась на GitHub. Ваши неотправленные правки сохранены в «🕘 Версии».";
+    }
     const text = f.encoding === "base64" && f.content ? b64decode(f.content) : await ghApi(path, { raw: true });
-    openDoc(text, { source: "github", name: name.replace(/\.(md|markdown|txt)$/i, ""), isMd: !/\.txt$/i.test(name), path, sha: f.sha }, true);
+    openDoc(text, { id, source: "github", name: name.replace(/\.(md|markdown|txt)$/i, ""), isMd: !/\.txt$/i.test(name), path, sha: f.sha, repo: gh().repo }, true, note);
     libMsg("");
   } catch (e) { libMsg(e.message); }
 }
@@ -742,12 +922,22 @@ async function saveCloud() {
   try {
     const res = await ghApi(meta.path, { method: "PUT", body: { message: `Правки: ${meta.name}`, content: b64encode(serialize()), sha: meta.sha } });
     meta.sha = res.content.sha; dirty = false; persist(); renderSaveState();
-    status("Сохранено в GitHub ✓");
+    await addVersion("сохранено в GitHub").catch(() => {});
+    status("Сохранено в GitHub и на телефоне ✓");
   } catch (e) {
     status(e.message + (e.status === 409 || e.status === 422 ? " Ваша версия цела: скачайте её (⬇), затем откройте главу заново и перенесите правки." : ""));
   } finally { $("save").disabled = false; }
 }
-$("save").onclick = saveCloud;
+async function saveLocal() {
+  stop();
+  try {
+    const added = await addVersion("сохранено");
+    dirty = false; persist(); renderSaveState();
+    status(added ? "Версия сохранена на телефоне ✓" : "Изменений с прошлой версии нет.");
+    if (!$("versionsPanel").hidden) renderVersions();
+  } catch (e) { status("Не удалось сохранить версию: " + (e?.message || e) + ". Скачайте файл (⬇)."); }
+}
+$("save").onclick = () => meta.source === "github" ? saveCloud() : saveLocal();
 $("refresh").onclick = listChapters;
 $("newChapter").onclick = async () => {
   const name = $("newName").value.trim();
@@ -1055,7 +1245,17 @@ function wakeStop() { const w = wake; wake = null; if (w) { w.onend = null; try 
 
 // ---------- start ----------
 syncCloudUI();
-$("resumeRow").hidden = !LS.get("doc");
+(async () => {                                   // move the old single saved text into phone storage
+  try {
+    const old = LS.get("doc");
+    if (old && !(await dbAll("docs")).length) {
+      const m = JSON.parse(LS.get("meta") || "{}");
+      await dbPut("docs", { id: newLocalId(), name: m.name || "Последний текст", source: "local", path: "", sha: "", repo: "", isMd: !!m.isMd, text: old, dirty: false, updated: Date.now() });
+    }
+    if (old) { localStorage.removeItem("doc"); localStorage.removeItem("meta"); }
+  } catch {}
+  renderLocalDocs();
+})();
 if (gh().repo && gh().token && !inArtifact) listChapters();
 else if (!gh().repo && !inArtifact) $("settings").open = false;
 </script>
