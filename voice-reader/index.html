@@ -4,185 +4,276 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Голосовой чтец</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Literata:opsz,wght@7..72,400;7..72,600&display=swap">
 <style>
-  :root { --bg:#fafaf7; --fg:#1d1d1b; --muted:#77776f; --hl:#ffe9a8; --edit:#c8f0c8; --acc:#2f6fdf; --card:#fff; --bd:#ddd; --flag:#d33; --warn:#b26a00; }
-  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#17171a; --fg:#e8e8e3; --muted:#9a9a92; --hl:#5a4a12; --edit:#1f4d26; --acc:#6a9cff; --card:#222226; --bd:#3a3a40; --flag:#ff6b6b; --warn:#f0b04a; color-scheme: dark; } }
-  :root[data-theme="dark"] { --bg:#17171a; --fg:#e8e8e3; --muted:#9a9a92; --hl:#5a4a12; --edit:#1f4d26; --acc:#6a9cff; --card:#222226; --bd:#3a3a40; --flag:#ff6b6b; --warn:#f0b04a; color-scheme: dark; }
+  /* Layout: three screens (menu, reading, settings); reading has a top bar and a bottom dock with the player. */
+  :root {
+    --bg:#f3f5f8; --surface:#ffffff; --surface2:#eef1f6; --fg:#1a1e25; --muted:#69707d; --line:#dde2ea;
+    --accent:#2b5bd7; --accent-fg:#ffffff; --accent-soft:#e3ebfd; --hl:#ffe69a; --edit:#d3f2d6; --flag:#d93b3b; --warn:#a96200;
+    --ui: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --read: "Literata", Georgia, "Times New Roman", serif;
+    --radius: 14px; --dock-h: 150px;
+  }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+    --bg:#121418; --surface:#1c1f25; --surface2:#252a32; --fg:#e7e9ee; --muted:#9aa1ad; --line:#323843;
+    --accent:#7ea2ff; --accent-fg:#0d1220; --accent-soft:#25304a; --hl:#5b4a12; --edit:#1f4a2a; --flag:#ff6b6b; --warn:#f0b04a; color-scheme: dark; } }
+  :root[data-theme="dark"] {
+    --bg:#121418; --surface:#1c1f25; --surface2:#252a32; --fg:#e7e9ee; --muted:#9aa1ad; --line:#323843;
+    --accent:#7ea2ff; --accent-fg:#0d1220; --accent-soft:#25304a; --hl:#5b4a12; --edit:#1f4a2a; --flag:#ff6b6b; --warn:#f0b04a; color-scheme: dark; }
   * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg); font:17px/1.6 system-ui, sans-serif; }
-  main { max-width: 820px; margin: 0 auto; padding-block: 16px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
-  h1 { font-size: 22px; margin: 8px 0 16px; }
-  h2 { font-size: 18px; margin: 0 0 10px; }
-  .row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:10px; }
-  input, select, textarea, button { font: inherit; color: inherit; background: var(--card); border:1px solid var(--bd); border-radius:8px; padding:8px 10px; }
-  textarea { width:100%; min-height:160px; resize: vertical; }
-  button { cursor:pointer; }
-  button:focus-visible, input:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
-  button.primary { background: var(--acc); color:#fff; border-color: var(--acc); }
-  .card { background: var(--card); border:1px solid var(--bd); border-radius:10px; padding:14px; margin-bottom:14px; }
-  #chapters, .list { display:flex; flex-direction:column; gap:6px; margin-bottom:10px; }
-  .list .item, #versionsPanel .item { display:flex; gap:8px; align-items:center; }
-  .list .item > button:first-child { flex:1; min-width:0; text-align:left; }
-  #versionsPanel .item { padding:6px 0; border-bottom:1px solid var(--bd); }
-  #versionsPanel .item .txt { flex:1; min-width:0; }
-  #versionsPanel .item .q { color: var(--muted); font-size: 14px; }
+  [hidden] { display: none !important; }
+  body { margin:0; background:var(--bg); color:var(--fg); font: 16px/1.5 var(--ui); -webkit-tap-highlight-color: transparent; }
+  body::before { content:""; position:fixed; inset:0 0 auto; height:env(safe-area-inset-top, 0px); z-index:10; background:var(--surface); }
+  .screen { max-width: 760px; margin: 0 auto; padding-block: 0 24px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+  h2 { font-size: 17px; font-weight: 600; margin: 0; text-wrap: balance; }
+  small, .muted { color: var(--muted); font-size: 14px; }
+  a { color: var(--accent); }
+  input, select, textarea, button { font: inherit; color: inherit; }
+  input, select, textarea { background: var(--surface); border:1px solid var(--line); border-radius:10px; padding:10px 12px; min-height:44px; width:100%; }
+  textarea { min-height:160px; resize: vertical; }
+  button { cursor:pointer; background: var(--surface2); border:1px solid transparent; border-radius:12px; padding:10px 14px; min-height:44px; font-weight:500; }
+  button:hover { filter: brightness(.97); }
+  button:disabled { opacity:.5; cursor:default; }
+  button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .primary { background: var(--accent); color: var(--accent-fg); }
+  .ghost { background: transparent; }
+  .danger { color: var(--flag); }
+  .row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+  .stack { display:flex; flex-direction:column; gap:10px; }
+  .grow { flex:1; min-width: 150px; }
+  .card { background: var(--surface); border:1px solid var(--line); border-radius: var(--radius); padding:16px; display:flex; flex-direction:column; gap:12px; }
+  .cards { display:flex; flex-direction:column; gap:14px; }
+  .card-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+
+  /* top bar */
+  .topbar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; display:flex; align-items:center; gap:8px; background: var(--surface); border-bottom:1px solid var(--line);
+            margin: 0 calc(-1 * max(16px, env(safe-area-inset-left, 0px))) 14px; padding: 8px max(12px, env(safe-area-inset-right, 0px)) 8px max(12px, env(safe-area-inset-left, 0px)); }
+  .topbar .title { flex:1; min-width:0; }
+  .topbar .title .name { font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .topbar .app { font-weight:700; font-size:18px; }
+  .back { background: transparent; color: var(--accent); font-weight:600; padding-inline: 8px; }
+  .icon { background: transparent; font-size: 20px; padding: 8px 10px; }
+  #saveState { font-size: 13px; color: var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #saveState.dirty { color: var(--warn); }
+  #save { padding-inline: 12px; white-space: nowrap; }
+  #save.dirty { background: var(--accent); color: var(--accent-fg); }
+  @media (max-width: 480px) { #save .lbl { display: none; } }
+
+  /* overflow menu */
+  .menu { position: fixed; z-index: 20; right: max(12px, env(safe-area-inset-right, 0px)); top: calc(60px + env(safe-area-inset-top, 0px)); background: var(--surface); border:1px solid var(--line); border-radius: var(--radius);
+          box-shadow: 0 12px 32px rgba(0,0,0,.18); padding:6px; display:flex; flex-direction:column; min-width: 230px; }
+  .menu button { background: transparent; text-align:left; border-radius:10px; }
+
+  /* library */
+  .hero { background: var(--accent-soft); border-color: transparent; }
+  .hero .name { font-size: 18px; font-weight: 600; }
+  #chapters, .list { display:flex; flex-direction:column; gap:6px; }
+  .list .item { display:flex; gap:6px; align-items:stretch; }
+  .entry { flex:1; min-width:0; text-align:left; display:flex; flex-direction:column; align-items:flex-start; gap:2px; background: var(--surface2); }
+  .entry .t { font-weight:600; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .entry .s { font-size: 13px; color: var(--muted); font-weight:400; }
+  .entry .s.dirty { color: var(--warn); }
   #chapters button { text-align:left; }
   #chapters button.dir { font-weight: 600; }
-  #chapters button:disabled { opacity: .55; cursor: default; }
-  #crumbs button { padding: 4px 8px; }
-  #actions { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin-bottom: 10px; }
-  #actions button { font-size: 16px; padding: 10px 4px; line-height: 1.2; }
-  #actions button.listening { background:var(--flag); color:#fff; border-color:var(--flag); animation: pulse 1s infinite; }
-  @keyframes pulse { 50% { opacity:.6; } }
-  @media (prefers-reduced-motion: reduce) { #actions button.listening { animation: none; } }
-  #reader { background:var(--card); border:1px solid var(--bd); border-radius:10px; padding:16px; min-height:120px; }
-  #reader p { margin: 0 0 .8em; }
-  #reader p.h { font-weight: 700; font-size: 1.15em; }
-  #reader span.s { cursor:pointer; border-radius:4px; transition: background .2s; }
+  #crumbs button { padding: 6px 10px; min-height: 36px; background: transparent; color: var(--accent); }
+  #libMsg:not(:empty) { display:block; background: var(--surface); border:1px solid var(--line); border-radius: 12px; padding: 10px 12px; margin-bottom: 14px; color: var(--fg); font-size: 14px; }
+  .bigbtns { display:grid; grid-template-columns: 1fr 1fr; gap:8px; }
+  .bigbtns button { min-height: 64px; }
+  details > summary { cursor:pointer; color: var(--muted); font-size: 14px; }
+
+  /* reading */
+  #status { color: var(--muted); font-size: 14px; min-height: 1.5em; margin: 0 0 10px; }
+  #reader { font-family: var(--read); font-size: 20px; line-height: 1.75; padding-bottom: calc(var(--dock-h) + env(safe-area-inset-bottom, 0px)); }
+  #reader p { margin: 0 0 .9em; }
+  #reader p.h { font-family: var(--ui); font-weight: 700; font-size: 1.15em; line-height: 1.35; margin-top: .6em; }
+  #reader span.s { cursor:pointer; border-radius:5px; padding: 1px 0; transition: background .2s; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
   #reader span.s.cur { background: var(--hl); }
   #reader span.s.edited { background: var(--edit); }
-  #reader span.s.flag { text-decoration: underline wavy var(--flag); text-underline-offset: 4px; }
-  #reader span.n { cursor:pointer; font-size: .85em; margin-right: 4px; }
-  #status { color: var(--muted); font-size: 15px; min-height: 1.6em; }
-  #saveState { font-size: 14px; color: var(--muted); }
-  #saveState.dirty { color: var(--warn); }
-  #notesPanel { margin-bottom: 10px; }
-  #notesPanel .item { display:flex; gap:8px; align-items:flex-start; padding:6px 0; border-bottom:1px solid var(--bd); }
-  #notesPanel .item .txt { flex:1; min-width:0; cursor:pointer; }
-  #notesPanel .item .q { color: var(--muted); font-size: 14px; }
-  details { margin-bottom: 12px; }
-  .grow { flex:1; min-width: 160px; }
-  small { color: var(--muted); }
-  small a { color: var(--acc); }
-  .bar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 2; background: var(--bg); padding: 8px 0; }
-  @media (max-width: 600px) {
-    body { font-size: 19px; }
-    .bar button { flex: 1; }
-    #actions { position: fixed; left: max(12px, env(safe-area-inset-left, 0px)); right: max(12px, env(safe-area-inset-right, 0px)); bottom: calc(12px + env(safe-area-inset-bottom, 0px)); z-index: 3; margin: 0; }
-    #actions button { font-size: 15px; padding: 12px 2px; box-shadow: 0 4px 16px rgba(0,0,0,.3); }
-    main { padding-bottom: 110px; }
-  }
+  #reader span.s.cur.edited { background: var(--hl); }
+  #reader span.s.flag { text-decoration: underline wavy var(--flag); text-underline-offset: 5px; }
+  #reader span.n { cursor:pointer; font-size: .8em; }
+  .panel { margin-bottom: 14px; }
+  .panel .item { display:flex; gap:8px; align-items:center; padding:8px 0; border-top:1px solid var(--line); }
+  .panel .item .txt { flex:1; min-width:0; cursor:pointer; }
+  .panel .item .q { color: var(--muted); font-size: 14px; }
+  #typedRow { margin-bottom: 12px; }
+
+  /* bottom dock */
+  .dock { position: fixed; left:0; right:0; bottom:0; z-index: 6; background: var(--surface); border-top:1px solid var(--line);
+          padding: 8px max(12px, env(safe-area-inset-right, 0px)) calc(8px + env(safe-area-inset-bottom, 0px)) max(12px, env(safe-area-inset-left, 0px)); }
+  .dock-inner { max-width: 760px; margin: 0 auto; display:flex; flex-direction:column; gap:8px; }
+  #actions { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+  #actions button { display:flex; flex-direction:column; align-items:center; gap:2px; padding: 6px 2px; font-size: 12px; line-height:1.1; background: var(--surface2); }
+  #actions button .i { font-size: 20px; }
+  #actions button.listening { background:var(--flag); color:#fff; animation: pulse 1s infinite; }
+  @keyframes pulse { 50% { opacity:.6; } }
+  @media (prefers-reduced-motion: reduce) { #actions button.listening { animation: none; } #reader span.s { transition: none; } }
+  .player { display:flex; align-items:center; justify-content:center; gap: 14px; }
+  .player button { background: transparent; font-size: 22px; min-width: 48px; }
+  .player #play { background: var(--accent); color: var(--accent-fg); width: 60px; height: 60px; border-radius: 50%; font-size: 24px; }
+  @media (min-width: 700px) { #reader { font-size: 21px; } }
 </style>
-</head>
-<body>
-<main>
-  <h1>Голосовой чтец с правкой</h1>
 
-  <details id="settings">
-    <summary>Настройки</summary>
-    <h2 style="margin-top:10px">Книга на GitHub</h2>
-    <div class="row">
-      <input id="ghRepo" class="grow" placeholder="владелец/репозиторий, например ivan/my-book" autocomplete="off">
-    </div>
-    <div class="row">
-      <input id="ghToken" class="grow" type="password" placeholder="GitHub токен (хранится только в этом браузере)" autocomplete="off">
-    </div>
-    <div class="row"><small>Токен: <a href="https://github.com/settings/personal-access-tokens/new" target="_blank">github.com → Fine-grained token</a> → Repository access: «Only select repositories» → ваш репозиторий книги → Permissions → Contents: «Read and write». Используйте приватный репозиторий.</small></div>
+<!-- ============ MENU ============ -->
+<div id="libraryView" class="screen">
+  <header class="topbar">
+    <div class="title"><div class="app">📖 Голосовой чтец</div></div>
+    <button id="settingsBtn" class="icon" aria-label="Настройки" title="Настройки">⚙</button>
+  </header>
+  <small id="libMsg" role="status"></small>
+  <div class="cards">
+    <section id="continueCard" class="card hero" hidden>
+      <div class="muted">Продолжить</div>
+      <div class="name" id="continueName"></div>
+      <div class="muted" id="continueInfo"></div>
+      <div><button id="continueBtn" class="primary">▶ Открыть</button></div>
+    </section>
 
-    <h2>Голос и правка</h2>
-    <div class="row">
-      ИИ для правки: <select id="provider">
-        <option value="none">Без ИИ — диктовка (мгновенно, бесплатно)</option>
-        <option value="gemini">Google Gemini (бесплатно, с лимитами)</option>
-        <option value="claude">Anthropic Claude (платно)</option>
-      </select>
-    </div>
-    <div class="row" id="keyRow">
-      <input id="apiKey" class="grow" type="password" placeholder="API key (хранится только в этом браузере)">
-    </div>
-    <div class="row" id="geminiRow">
-      Модель: <input id="model" class="grow" value="gemini-flash-latest">
-    </div>
-    <div class="row"><small id="keyHelp"></small></div>
-    <div class="row">
-      Голос: <select id="voice" class="grow"></select>
-    </div>
-    <div class="row">
-      Скорость: <input id="rate" type="range" min="0.5" max="2" step="0.1" value="1"> <span id="rateVal">1.0</span>
-    </div>
-    <div class="row" id="wakeRow">
-      <label><input type="checkbox" id="wake"> Голосовые команды: «стоп», «дальше», «правка», «добавь» (экспериментально)</label>
-    </div>
-    <div class="row"><small id="diag">Диагностика…</small></div>
-  </details>
+    <section class="card">
+      <h2>＋ Новый текст</h2>
+      <div class="bigbtns">
+        <button id="openFile">📄 Открыть файл<br><small>.docx, .md, .txt</small></button>
+        <button id="pasteBtn">📋 Вставить текст</button>
+      </div>
+      <input type="file" id="file" accept=".docx,.md,.markdown,.txt,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
+      <div id="pasteBox" class="stack" hidden>
+        <textarea id="input" placeholder="Вставьте текст на русском…"></textarea>
+        <div><button class="primary" id="load">Читать этот текст</button></div>
+      </div>
+    </section>
 
-  <div id="libraryView">
-    <div class="card">
-      <h2>☁ Книга на GitHub</h2>
-      <div id="cloudOff"><small>Укажите репозиторий и токен в Настройках.</small></div>
-      <div id="cloudOn" hidden>
+    <section class="card">
+      <h2>📱 На телефоне</h2>
+      <div id="localDocs" class="list"></div>
+      <details>
+        <summary>Резервная копия</summary>
+        <div class="stack" style="margin-top:10px">
+          <small>Тексты и версии хранятся в памяти браузера на этом телефоне и работают без интернета. Очистка данных браузера их удалит — иногда сохраняйте копию или храните книгу в GitHub.</small>
+          <div class="row">
+            <button id="backup">⬇ Сохранить копию всего</button>
+            <button id="restoreBtn">⬆ Восстановить из копии</button>
+          </div>
+        </div>
+      </details>
+      <input type="file" id="restoreFile" accept=".json,application/json" hidden>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>☁ Книга на GitHub</h2><button id="refresh" class="icon" title="Обновить" aria-label="Обновить">↻</button></div>
+      <div id="cloudOff" class="stack"><small>Храните главы в своём приватном репозитории GitHub: каждое сохранение — версия, доступ с любого устройства.</small><div><button id="cloudSetup">Подключить GitHub</button></div></div>
+      <div id="cloudOn" class="stack" hidden>
         <div class="row" id="crumbs"></div>
         <div id="chapters"></div>
-        <div class="row">
-          <button id="uploadBtn">⬆ Загрузить файлы (.docx, .md, .txt)</button>
-          <input type="file" id="upload" multiple accept=".docx,.md,.markdown,.txt,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
-          <button id="refresh" title="Обновить">↻</button>
-        </div>
+        <button id="uploadBtn">⬆ Загрузить файлы с телефона</button>
+        <input type="file" id="upload" multiple accept=".docx,.md,.markdown,.txt,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
         <div class="row">
           <input id="newName" class="grow" placeholder="Название главы или папки">
           <button id="newChapter">＋ Глава</button>
           <button id="newFolder">＋ Папка</button>
         </div>
       </div>
-    </div>
-    <div class="card">
-      <h2>📱 На телефоне</h2>
-      <div id="localDocs" class="list"></div>
-      <div class="row">
-        <button id="backup">⬇ Резервная копия всего</button>
-        <button id="restoreBtn">⬆ Восстановить из копии</button>
-        <input type="file" id="restoreFile" accept=".json,application/json" hidden>
-      </div>
-      <small>Тексты и все версии хранятся в памяти браузера на этом телефоне и работают без интернета. Очистка данных браузера их удалит, поэтому иногда делайте резервную копию или храните книгу в GitHub.</small>
-    </div>
-    <div class="card">
-      <h2>Новый текст</h2>
-      <textarea id="input" placeholder="Вставьте текст на русском…"></textarea>
-      <div class="row">
-        <button class="primary" id="load">Читать этот текст</button>
-        <button id="openFile">📄 Открыть файл (.docx, .md, .txt)</button>
-        <input type="file" id="file" accept=".docx,.md,.markdown,.txt,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
-      </div>
-    </div>
-    <div id="libStatus" class="row"><small id="libMsg"></small></div>
+    </section>
   </div>
+</div>
 
-  <div id="readerView" hidden>
-    <div class="row bar">
-      <button id="play" class="primary">▶ Читать</button>
-      <button id="pause">⏸ Пауза</button>
-      <button id="save">💾 Сохранить</button>
-      <button id="back">☰ Главы</button>
-      <button id="undo">↶ Отменить</button>
-      <button id="notesBtn">📋 Заметки</button>
-      <button id="versionsBtn">🕘 Версии</button>
-      <button id="download">⬇ Скачать</button>
-    </div>
-    <div class="row"><strong id="docTitle"></strong> <span id="saveState"></span></div>
-    <div id="actions">
-      <button id="mic" title="Клавиша E">🎤<br>Правка</button>
-      <button id="add" title="Клавиша A">➕<br>Фраза</button>
-      <button id="para" title="Клавиша P">¶<br>Абзац</button>
-      <button id="note" title="Клавиша N">📝<br>Заметка</button>
-      <button id="flag" title="Клавиша F">🚩<br>Флажок</button>
-    </div>
-    <div class="row">
-      <input id="typed" class="grow" placeholder="…или напишите текст">
-      <select id="typedMode">
-        <option value="edit">Заменить</option>
-        <option value="add">Добавить фразу</option>
-        <option value="para">Новый абзац</option>
-        <option value="note">Заметка</option>
-      </select>
-      <button id="typedGo">OK</button>
-    </div>
-    <div id="notesPanel" class="card" hidden></div>
-    <div id="versionsPanel" class="card" hidden></div>
-    <div id="status"></div>
-    <div id="reader"></div>
-    <p><small>Клик по предложению — читать с него. «Правка» заменяет выделенное предложение тем, что вы скажете («пусть будет …», «удали»). «Фраза» вставляет сказанное после него, «Абзац» — новым абзацем. «Заметка» прикрепляет к предложению комментарий, текст не меняется. «Флажок» отмечает место, чтобы вернуться позже. Заметки и флажки хранятся в самом .md-файле как скрытые комментарии.</small></p>
+<!-- ============ SETTINGS ============ -->
+<div id="settingsView" class="screen" hidden>
+  <header class="topbar">
+    <button id="settingsBack" class="back">← Назад</button>
+    <div class="title"><div class="name">Настройки</div></div>
+  </header>
+  <div class="cards" id="settings">
+    <section class="card">
+      <h2>Голос</h2>
+      <label class="stack"><span class="muted">Голос</span><select id="voice"></select></label>
+      <label class="stack"><span class="muted">Скорость: <span id="rateVal">1.0</span></span><input id="rate" type="range" min="0.5" max="2" step="0.1" value="1" style="padding:0"></label>
+      <small>Голоса лучше: Android → Настройки → Синтез речи → Google → Установка голосовых данных → Русский.</small>
+    </section>
+    <section class="card">
+      <h2>Книга на GitHub</h2>
+      <input id="ghRepo" placeholder="владелец/репозиторий, например ivan/my-book" autocomplete="off">
+      <input id="ghToken" type="password" placeholder="GitHub токен (хранится только на этом телефоне)" autocomplete="off">
+      <small>Токен: <a href="https://github.com/settings/personal-access-tokens/new" target="_blank">github.com → Fine-grained token</a> → Repository access: «Only select repositories» → репозиторий книги → Permissions → Contents: «Read and write». Используйте приватный репозиторий.</small>
+    </section>
+    <section class="card">
+      <h2>Правка</h2>
+      <label class="stack"><span class="muted">Как применять правку</span>
+        <select id="provider">
+          <option value="none">Без ИИ — диктовка (мгновенно, бесплатно)</option>
+          <option value="gemini">Google Gemini (бесплатно, с лимитами)</option>
+          <option value="claude">Anthropic Claude (платно)</option>
+        </select>
+      </label>
+      <div id="keyRow"><input id="apiKey" type="password" placeholder="API key (хранится только на этом телефоне)"></div>
+      <label id="geminiRow" class="stack"><span class="muted">Модель</span><input id="model" value="gemini-flash-latest"></label>
+      <small id="keyHelp"></small>
+      <label id="wakeRow" class="row"><input type="checkbox" id="wake" style="width:auto;min-height:0"> Голосовые команды «стоп», «дальше», «правка», «добавь» (экспериментально)</label>
+    </section>
+    <details><summary>Диагностика</summary><small id="diag">…</small></details>
   </div>
-</main>
+</div>
+
+<!-- ============ READING ============ -->
+<div id="readerView" class="screen" hidden>
+  <header class="topbar">
+    <button id="back" class="back" aria-label="В меню">← Меню</button>
+    <div class="title"><div class="name" id="docTitle"></div><div id="saveState"></div></div>
+    <button id="save"><span id="saveIcon">💾</span><span class="lbl"> Сохранить</span></button>
+    <button id="moreBtn" class="icon" aria-label="Ещё" title="Ещё">⋯</button>
+  </header>
+  <div id="moreMenu" class="menu" hidden>
+    <button id="notesBtn">📋 Заметки и флажки</button>
+    <button id="versionsBtn">🕘 Версии</button>
+    <button id="typeBtn">⌨ Ввести текстом</button>
+    <button id="download">⬇ Скачать файл</button>
+    <button id="helpBtn">❔ Как пользоваться</button>
+    <button id="settingsBtn2">⚙ Настройки</button>
+  </div>
+  <div id="typedRow" class="card" hidden>
+    <input id="typed" placeholder="Напишите текст">
+    <div class="row">
+      <select id="typedMode" class="grow">
+        <option value="edit">Заменить предложение</option>
+        <option value="add">Добавить фразу после</option>
+        <option value="para">Новый абзац после</option>
+        <option value="note">Заметка к предложению</option>
+      </select>
+      <button id="typedGo" class="primary">Применить</button>
+    </div>
+  </div>
+  <div id="helpPanel" class="card panel" hidden>
+    <div class="card-head"><h2>Как пользоваться</h2><button class="icon" data-close="helpPanel" aria-label="Закрыть">✕</button></div>
+    <small>Нажмите на предложение — чтение начнётся с него. Кнопки внизу работают с выделенным предложением:<br>
+    🎤 <b>Правка</b> — скажите новый вариант («пусть будет …»; «удали» — удалить).<br>
+    ➕ <b>Фраза</b> — вставить сказанное после предложения. ¶ <b>Абзац</b> — новым абзацем.<br>
+    📝 <b>Заметка</b> — комментарий, текст не меняется. 🚩 <b>Флажок</b> — отметить, чтобы вернуться.<br>
+    Всё сохраняется на телефоне автоматически; «Сохранить» создаёт версию (и отправляет в GitHub для глав оттуда).</small>
+  </div>
+  <div id="notesPanel" class="card panel" hidden></div>
+  <div id="versionsPanel" class="card panel" hidden></div>
+  <div id="status" role="status"></div>
+  <article id="reader"></article>
+  <div class="dock">
+    <div class="dock-inner">
+      <div id="actions">
+        <button id="mic" title="Клавиша E"><span class="i">🎤</span>Правка</button>
+        <button id="add" title="Клавиша A"><span class="i">➕</span>Фраза</button>
+        <button id="para" title="Клавиша P"><span class="i">¶</span>Абзац</button>
+        <button id="note" title="Клавиша N"><span class="i">📝</span>Заметка</button>
+        <button id="flag" title="Клавиша F"><span class="i">🚩</span>Флажок</button>
+      </div>
+      <div class="player">
+        <button id="undo" aria-label="Отменить" title="Отменить">↶</button>
+        <button id="prevBtn" aria-label="Предыдущее предложение" title="Назад">⏮</button>
+        <button id="play" aria-label="Читать" title="Читать / пауза (пробел)">▶</button>
+        <button id="nextBtn" aria-label="Следующее предложение" title="Вперёд">⏭</button>
+        <span style="min-width:48px"></span>
+      </div>
+    </div>
+  </div>
+</div>
+
 
 <script type="module">
 const SDK_URL = "https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@1.4.0/+esm";
@@ -412,6 +503,7 @@ function renderSaveState() {
     ? (dirty ? "● не сохранено в GitHub (копия есть на телефоне)" : "✓ сохранено в GitHub и на телефоне")
     : (dirty ? "● изменено после последней версии" : "✓ версия сохранена на телефоне");
   st.className = dirty ? "dirty" : "";
+  $("save").classList.toggle("dirty", dirty);
 }
 window.addEventListener("beforeunload", (e) => {
   if (saveTimer) saveWorking();
@@ -435,10 +527,12 @@ function openDoc(text, m, keepPos = true, note = "") {
   idx = keepPos && pos < sentences.length ? pos : 0;
   persist(); saveWorking();
   countVersions(meta.id).then(n => { if (!n) addVersionFor(meta.id, text, "исходный текст"); }).catch(() => {});
-  $("libraryView").hidden = true; $("readerView").hidden = false;
+  show("read");
+  if (location.hash !== "#read") go("read");
   $("docTitle").textContent = meta.name;
-  $("save").textContent = meta.source === "github" ? "☁ Сохранить" : "💾 Сохранить";
-  $("notesPanel").hidden = true; $("versionsPanel").hidden = true;
+  $("saveIcon").textContent = meta.source === "github" ? "☁" : "💾";
+  $("save").title = meta.source === "github" ? "Сохранить в GitHub и на телефоне" : "Сохранить версию на телефоне";
+  $("notesPanel").hidden = true; $("versionsPanel").hidden = true; $("typedRow").hidden = true; $("helpPanel").hidden = true;
   render(); renderSaveState(); wakeStart();
   const nNotes = sentences.reduce((a, s) => a + s.notes.length + (s.flag ? 1 : 0), 0);
   status((note ? note + " " : "") + (sentences.length
@@ -465,7 +559,7 @@ async function renderVersions() {
   catch (e) { panel.textContent = "Хранилище телефона недоступно: " + (e?.message || e); return; }
   const cur = serialize(), curWords = words(cur);
   panel.replaceChildren();
-  const h = document.createElement("h2"); h.textContent = `Версии на телефоне (${vs.length})`; panel.appendChild(h);
+  const h = document.createElement("h2"); h.textContent = `Версии на телефоне (${vs.length})`; panel.appendChild(panelHead(h, panel));
   const hint = document.createElement("small");
   hint.textContent = `Версия создаётся при открытии, при каждом «Сохранить» и перед восстановлением старой. Хранятся последние ${MAX_VERSIONS}.`;
   panel.appendChild(hint);
@@ -495,28 +589,44 @@ $("versionsBtn").onclick = () => {
 };
 
 // ---------- library: texts on the phone ----------
-let pendingDelete = null;
+let pendingDelete = null, localRender = 0;
 async function renderLocalDocs() {
-  const box = $("localDocs");
+  const my = ++localRender;                     // a newer call wins; stale ones stop
+  const box = document.createElement("div");
   let docs;
   try { docs = (await dbAll("docs")).sort((a, b) => b.updated - a.updated); }
-  catch (e) { box.textContent = "Хранилище телефона недоступно: " + (e?.message || e); return; }
-  box.replaceChildren();
-  if (!docs.length) { const p = document.createElement("small"); p.textContent = "Пока пусто. Откройте файл, вставьте текст или откройте главу из GitHub."; box.appendChild(p); return; }
-  for (const d of docs) {
-    const n = await countVersions(d.id).catch(() => 0);
+  catch (e) { $("localDocs").textContent = "Хранилище телефона недоступно: " + (e?.message || e); return; }
+  const openLocal = (d) => openDoc(d.text, { ...d }, true,
+    d.source === "github" ? "Копия с телефона. Если глава менялась на компьютере, откройте её из списка GitHub." : "");
+  // "Continue" card: the text opened last
+  const last = docs.find(d => d.id === LS.get("lastDoc")) || docs[0];
+  $("continueCard").hidden = !last;
+  if (last) {
+    const pos = +(LS.get("pos:" + last.id) || 0);
+    $("continueName").textContent = (last.source === "github" ? "☁ " : "📱 ") + last.name;
+    $("continueInfo").textContent = `${fmtDate(last.updated)}` + (pos ? ` · предложение ${pos + 1}` : "") + (last.dirty ? (last.source === "github" ? " · не отправлено в GitHub" : " · есть несохранённые правки") : "");
+    $("continueBtn").onclick = () => openLocal(last);
+  }
+  if (!docs.length) { const p = document.createElement("small"); p.textContent = "Пока пусто. Откройте файл, вставьте текст или откройте главу из GitHub."; $("localDocs").replaceChildren(p); return; }
+  const counts = await Promise.all(docs.map(d => countVersions(d.id).catch(() => 0)));
+  if (my !== localRender) return;
+  docs.forEach((d, k) => {
+    const n = counts[k];
     const row = document.createElement("div"); row.className = "item";
-    const b = document.createElement("button");
-    b.textContent = `${d.source === "github" ? "☁" : "📱"} ${d.name}  ·  ${fmtDate(d.updated)}  ·  версий: ${n}` + (d.dirty ? (d.source === "github" ? "  ·  ● не в GitHub" : "  ·  ● есть правки") : "");
-    b.onclick = () => openDoc(d.text, { ...d }, true,
-      d.source === "github" ? "Копия с телефона. Если глава менялась на компьютере, откройте её из списка GitHub." : "");
-    const del = document.createElement("button"); del.textContent = "✕"; del.title = "Удалить с телефона";
+    const b = document.createElement("button"); b.className = "entry";
+    const t = document.createElement("span"); t.className = "t"; t.textContent = (d.source === "github" ? "☁ " : "📱 ") + d.name;
+    const sub = document.createElement("span"); sub.className = "s" + (d.dirty ? " dirty" : "");
+    sub.textContent = `${fmtDate(d.updated)} · версий: ${n}` + (d.dirty ? (d.source === "github" ? " · ● не в GitHub" : " · ● есть правки") : "");
+    b.append(t, sub);
+    b.onclick = () => openLocal(d);
+    const del = document.createElement("button"); del.textContent = "🗑"; del.title = "Удалить с телефона"; del.className = "ghost"; del.setAttribute("aria-label", "Удалить " + d.name);
     del.onclick = async () => {
-      if (pendingDelete !== d.id) { pendingDelete = d.id; libMsg(`Нажмите ✕ ещё раз, чтобы удалить «${d.name}» и все его версии с телефона` + (d.source === "github" ? " (в GitHub глава останется)." : ".")); return; }
+      if (pendingDelete !== d.id) { pendingDelete = d.id; libMsg(`Нажмите 🗑 ещё раз, чтобы удалить «${d.name}» и все его версии с телефона` + (d.source === "github" ? " (в GitHub глава останется)." : ".")); return; }
       pendingDelete = null; await deleteDoc(d.id); libMsg(`«${d.name}» удалён с телефона.`); renderLocalDocs();
     };
     row.append(b, del); box.appendChild(row);
-  }
+  });
+  $("localDocs").replaceChildren(...box.childNodes);
 }
 
 // ---------- backup of everything on the phone ----------
@@ -601,7 +711,7 @@ function renderNotes() {
   });
   const panel = $("notesPanel");
   panel.replaceChildren();
-  const h = document.createElement("h2"); h.textContent = `Заметки и флажки (${items.length})`; panel.appendChild(h);
+  const h = document.createElement("h2"); h.textContent = `Заметки и флажки (${items.length})`; panel.appendChild(panelHead(h, panel));
   if (!items.length) { const p = document.createElement("small"); p.textContent = "Пока нет. Нажмите «Заметка» или «Флажок» во время чтения."; panel.appendChild(p); return; }
   for (const it of items) {
     const row = document.createElement("div"); row.className = "item";
@@ -668,7 +778,7 @@ $("voice").onchange = () => LS.set(T ? "cvoice" : "voice", $("voice").value);
 let playing = false, startedAt = 0, utter = null, ttsToken = 0;
 function speakCurrent() {
   if (!playing) return;
-  if (idx >= sentences.length) { playing = false; status("Конец текста."); return; }
+  if (idx >= sentences.length) { setPlaying(false); status("Конец текста."); return; }
   highlight();
   if (T) {                                   // claude.ai platform voice
     const my = ++ttsToken;
@@ -678,14 +788,14 @@ function speakCurrent() {
       .then(() => { if (my === ttsToken && playing) { idx++; speakCurrent(); } })
       .catch((e) => {
         if (my !== ttsToken || !playing) return;
-        playing = false;
+        setPlaying(false);
         status(e?.code === "rate_limited" ? "Слишком много запросов к озвучке, подождите и нажмите ▶."
              : e?.code === "not_granted" ? "Озвучка отключена в разрешениях этой страницы."
              : "Ошибка озвучки: " + (e?.code || e));
       });
     return;
   }
-  if (!window.speechSynthesis) { playing = false; status("Браузер не умеет озвучивать текст."); return; }
+  if (!window.speechSynthesis) { setPlaying(false); status("Браузер не умеет озвучивать текст."); return; }
   if (!speechSynthesis.getVoices().some(v => v.lang.toLowerCase().startsWith("ru")))
     setTimeout(() => { if (playing && !speechSynthesis.speaking) status("Системный голос не отвечает: установите русский язык в настройках синтеза речи телефона."); }, 3000);
   utter = new SpeechSynthesisUtterance(sentences[idx].text);
@@ -698,10 +808,16 @@ function speakCurrent() {
   utter.onend = () => { if (utter === mine && playing) { idx++; speakCurrent(); } };
   speechSynthesis.speak(utter);
 }
-function play() { if (playing || !sentences.length) return; playing = true; speakCurrent(); }
-function stop() { playing = false; utter = null; ttsToken++; try { T?.stop(); } catch {} window.speechSynthesis?.cancel(); }
-$("play").onclick = play;
-$("pause").onclick = () => { stop(); status("Пауза."); };
+function setPlaying(v) {
+  playing = v;
+  $("play").textContent = v ? "⏸" : "▶";
+  $("play").setAttribute("aria-label", v ? "Пауза" : "Читать");
+}
+function play() { if (playing || !sentences.length) return; setPlaying(true); speakCurrent(); }
+function stop() { setPlaying(false); utter = null; ttsToken++; try { T?.stop(); } catch {} window.speechSynthesis?.cancel(); }
+$("play").onclick = () => { if (playing) { stop(); status("Пауза."); } else play(); };
+$("prevBtn").onclick = () => { const was = playing; stop(); idx = Math.max(0, idx - 1); highlight(); if (was) play(); };
+$("nextBtn").onclick = () => { const was = playing; stop(); idx = Math.min(sentences.length - 1, idx + 1); highlight(); if (was) play(); };
 
 // People react late: if the current sentence only just started, they mean the previous one.
 function targetIndex() {
@@ -712,7 +828,10 @@ function targetIndex() {
 // ---------- library: local text and files ----------
 $("load").onclick = () => {
   LS.set("text", $("input").value);
-  openDoc($("input").value, { source: "local", name: "Вставленный текст", isMd: false }, false);
+  const t = $("input").value;
+  $("pasteBox").hidden = true;
+  const firstLine = t.trim().split("\n")[0].replace(/^#+\s*/, "").slice(0, 40);
+  openDoc(t, { source: "local", name: firstLine || "Вставленный текст", isMd: /^\s{0,3}(#{1,6}\s|[-*+]\s|>\s)/m.test(t) }, false);
 };
 $("openFile").onclick = () => $("file").click();
 $("file").onchange = async () => {
@@ -724,15 +843,55 @@ $("file").onchange = async () => {
     else openDoc(await f.text(), { source: "local", name: f.name, isMd: /\.(md|markdown)$/i.test(f.name) }, false);
   } catch (e) { libMsg("Не удалось открыть файл: " + (e?.message || e)); }
 };
+// ---------- screens & navigation (hash routing, so the phone's Back button works) ----------
+const VIEWS = { "": "libraryView", read: "readerView", settings: "settingsView" };
+function show(view) {
+  for (const [k, id] of Object.entries(VIEWS)) $(id).hidden = k !== view;
+  $("moreMenu").hidden = true;
+  window.scrollTo(0, 0);
+}
+let navDepth = 0;
+function go(view) {
+  if ((location.hash.slice(1) || "") === view) { route(); return; }
+  navDepth++; location.hash = view;
+}
+function goBack() { if (navDepth > 0) window.history.back(); else { location.hash = ""; } }
+function route() {
+  const v = location.hash.slice(1);
+  if (v === "read" && meta.id) { if (saveTimer) saveWorking(); show("read"); highlight(); }
+  else if (v === "settings") { stop(); show("settings"); }
+  else showLibrary();
+}
+window.addEventListener("hashchange", () => { if (navDepth > 0 && !location.hash.slice(1)) navDepth = 0; route(); });
+function panelHead(h, panel) {
+  const d = document.createElement("div"); d.className = "card-head";
+  const x = document.createElement("button"); x.className = "icon"; x.textContent = "✕"; x.setAttribute("aria-label", "Закрыть");
+  x.onclick = () => { panel.hidden = true; };
+  d.append(h, x); return d;
+}
+document.addEventListener("click", (e) => {
+  const c = e.target.closest?.("[data-close]"); if (c) $(c.dataset.close).hidden = true;
+  if (!$("moreMenu").hidden && !e.target.closest("#moreMenu") && !e.target.closest("#moreBtn")) $("moreMenu").hidden = true;
+});
+$("moreBtn").onclick = () => { $("moreMenu").hidden = !$("moreMenu").hidden; };
+for (const id of ["notesBtn", "versionsBtn", "typeBtn", "download", "helpBtn", "settingsBtn2"]) $(id).addEventListener("click", () => { $("moreMenu").hidden = true; });
+$("typeBtn").onclick = () => { $("typedRow").hidden = !$("typedRow").hidden; if (!$("typedRow").hidden) $("typed").focus(); };
+$("helpBtn").onclick = () => { $("helpPanel").hidden = !$("helpPanel").hidden; };
+$("settingsBtn").onclick = () => go("settings");
+$("settingsBtn2").onclick = () => go("settings");
+$("settingsBack").onclick = goBack;
+$("cloudSetup").onclick = () => { go("settings"); setTimeout(() => $("ghRepo").focus(), 50); };
+$("pasteBtn").onclick = () => { $("pasteBox").hidden = !$("pasteBox").hidden; if (!$("pasteBox").hidden) $("input").focus(); };
+
 function showLibrary() {
   stop(); wakeStop();
   if (saveTimer) saveWorking();
-  $("readerView").hidden = true; $("libraryView").hidden = false;
+  show("");
   syncCloudUI();
   renderLocalDocs();
   libMsg(dirty && meta.source === "github" ? `В «${meta.name}» есть правки, не отправленные в GitHub. Они сохранены на телефоне.` : "");
 }
-$("back").onclick = showLibrary;
+$("back").onclick = goBack;
 $("download").onclick = () => downloadText(baseName() + ext(), serialize());
 
 // ---------- .docx -> markdown (mammoth, loaded on first use) ----------
@@ -772,6 +931,7 @@ function goTo(path) { ghPath = path; LS.set("ghPath", path); listChapters(); }
 function syncCloudUI() {
   const ok = !!(gh().repo && gh().token) && !inArtifact;
   $("cloudOn").hidden = !ok; $("cloudOff").hidden = ok;
+  $("refresh").hidden = !ok;
   if (inArtifact) $("cloudOff").innerHTML = "<small>Облако работает только в версии на GitHub Pages: страница внутри claude.ai не может обращаться к GitHub.</small>";
 }
 
@@ -834,7 +994,10 @@ async function listChapters() {
       const b = document.createElement("button");
       if (READABLE.test(f.name)) {
         const pos = +(LS.get("pos:" + ghId(f.path)) || 0);
-        b.textContent = "📖 " + f.name.replace(READABLE, "") + `  ·  ${kb(f.size)}` + (pos ? `  ·  остановились на ${pos + 1}` : "");
+        b.className = "entry";
+        const t = document.createElement("span"); t.className = "t"; t.textContent = "📖 " + f.name.replace(READABLE, "");
+        const sub = document.createElement("span"); sub.className = "s"; sub.textContent = kb(f.size) + (pos ? ` · предложение ${pos + 1}` : "");
+        b.append(t, sub);
         b.onclick = () => openChapter(f.path, f.name);
       } else {
         b.textContent = `📄 ${f.name}  ·  ${kb(f.size)}  ·  не читается`;
@@ -1099,7 +1262,7 @@ async function applyEdit(i, command) {
   if (!sentences[i]) return;
   const key = $("apiKey").value.trim();
   const mode = $("provider").value;
-  if (mode !== "none" && !key) { status("Укажите API key в настройках."); $("settings").open = true; return; }
+  if (mode !== "none" && !key) { status("Укажите API key в настройках."); go("settings"); return; }
   status(`Правлю: «${command}»…`);
   const prompt =
 `Предыдущее предложение: ${sentences[i - 1]?.text ?? "(нет)"}
@@ -1257,7 +1420,7 @@ syncCloudUI();
   renderLocalDocs();
 })();
 if (gh().repo && gh().token && !inArtifact) listChapters();
-else if (!gh().repo && !inArtifact) $("settings").open = false;
+route();
 </script>
 </body>
 </html>
