@@ -69,7 +69,8 @@
   .hero { background: var(--accent-soft); border-color: transparent; }
   .hero .name { font-size: 18px; font-weight: 600; }
   #chapters, .list { display:flex; flex-direction:column; gap:6px; }
-  .list .item { display:flex; gap:6px; align-items:stretch; }
+  .list .item { display:flex; gap:4px; align-items:stretch; }
+  .list .item input { flex:1; }
   .entry { flex:1; min-width:0; text-align:left; display:flex; flex-direction:column; align-items:flex-start; gap:2px; background: var(--surface2); }
   .entry .t { font-weight:600; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .entry .s { font-size: 13px; color: var(--muted); font-weight:400; }
@@ -77,7 +78,7 @@
   #chapters button { text-align:left; }
   #chapters button.dir { font-weight: 600; }
   #crumbs button { padding: 6px 10px; min-height: 36px; background: transparent; color: var(--accent); }
-  #libMsg:not(:empty) { display:block; background: var(--surface); border:1px solid var(--line); border-radius: 12px; padding: 10px 12px; margin-bottom: 14px; color: var(--fg); font-size: 14px; }
+  #projMsg:not(:empty), #libMsg:not(:empty) { display:block; background: var(--surface); border:1px solid var(--line); border-radius: 12px; padding: 10px 12px; margin-bottom: 14px; color: var(--fg); font-size: 14px; }
   .bigbtns { display:grid; grid-template-columns: 1fr 1fr; gap:8px; }
   .bigbtns button { min-height: 64px; }
   details > summary { cursor:pointer; color: var(--muted); font-size: 14px; }
@@ -131,25 +132,16 @@
     </section>
 
     <section class="card">
-      <h2>＋ Новый текст</h2>
-      <div class="bigbtns">
-        <button id="openFile">📄 Открыть файл<br><small>.docx, .md, .txt</small></button>
-        <button id="pasteBtn">📋 Вставить текст</button>
+      <h2>📁 Проекты</h2>
+      <div id="projects" class="list"></div>
+      <div class="row">
+        <input id="newProjectName" class="grow" placeholder="Название нового проекта">
+        <button id="newProject" class="primary">＋ Проект</button>
       </div>
-      <input type="file" id="file" accept=".docx,.md,.markdown,.txt,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
-      <div id="pasteBox" class="stack" hidden>
-        <textarea id="input" placeholder="Вставьте текст на русском…"></textarea>
-        <div><button class="primary" id="load">Читать этот текст</button></div>
-      </div>
-    </section>
-
-    <section class="card">
-      <h2>📱 На телефоне</h2>
-      <div id="localDocs" class="list"></div>
       <details>
         <summary>Резервная копия</summary>
         <div class="stack" style="margin-top:10px">
-          <small>Тексты и версии хранятся в памяти браузера на этом телефоне и работают без интернета. Очистка данных браузера их удалит — иногда сохраняйте копию или храните книгу в GitHub.</small>
+          <small>Проекты, тексты и версии хранятся в памяти браузера на этом телефоне и работают без интернета. Очистка данных браузера их удалит — иногда сохраняйте копию или храните книгу в GitHub.</small>
           <div class="row">
             <button id="backup">⬇ Сохранить копию всего</button>
             <button id="restoreBtn">⬆ Восстановить из копии</button>
@@ -172,6 +164,47 @@
           <button id="newChapter">＋ Глава</button>
           <button id="newFolder">＋ Папка</button>
         </div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<!-- ============ PROJECT ============ -->
+<div id="projectView" class="screen" hidden>
+  <header class="topbar">
+    <button id="projBack" class="back">← Меню</button>
+    <div class="title"><div class="name" id="projTitle"></div><div id="projInfo" class="muted" style="font-size:13px"></div></div>
+    <button id="projMoreBtn" class="icon" aria-label="Действия с проектом" title="Ещё">⋯</button>
+  </header>
+  <div id="projMenu" class="menu" hidden>
+    <button id="projRename">✎ Переименовать проект</button>
+    <button id="projDelete" class="danger">🗑 Удалить проект</button>
+  </div>
+  <div id="projRenameRow" class="card" hidden style="margin-bottom:14px">
+    <input id="projNameInput" placeholder="Название проекта">
+    <div class="row"><button id="projRenameOk" class="primary">Сохранить</button><button data-close="projRenameRow">Отмена</button></div>
+  </div>
+  <small id="projMsg" class="msg" role="status"></small>
+  <div class="cards">
+    <section class="card">
+      <h2>Файлы</h2>
+      <div id="projFiles" class="list"></div>
+    </section>
+    <section class="card">
+      <h2>＋ Добавить в проект</h2>
+      <div class="bigbtns">
+        <button id="openFile">📄 Файлы с телефона<br><small>.docx, .md, .txt</small></button>
+        <button id="pasteBtn">📋 Вставить текст</button>
+      </div>
+      <input type="file" id="file" multiple accept=".docx,.md,.markdown,.txt,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
+      <div id="pasteBox" class="stack" hidden>
+        <input id="pasteName" placeholder="Название (необязательно)">
+        <textarea id="input" placeholder="Вставьте текст на русском…"></textarea>
+        <div><button class="primary" id="load">Добавить и читать</button></div>
+      </div>
+      <div class="row">
+        <input id="newFileName" class="grow" placeholder="Название новой главы">
+        <button id="newFile">＋ Пустой файл</button>
       </div>
     </section>
   </div>
@@ -217,7 +250,7 @@
 <!-- ============ READING ============ -->
 <div id="readerView" class="screen" hidden>
   <header class="topbar">
-    <button id="back" class="back" aria-label="В меню">← Меню</button>
+    <button id="back" class="back" aria-label="Назад">← Назад</button>
     <div class="title"><div class="name" id="docTitle"></div><div id="saveState"></div></div>
     <button id="save"><span id="saveIcon">💾</span><span class="lbl"> Сохранить</span></button>
     <button id="moreBtn" class="icon" aria-label="Ещё" title="Ещё">⋯</button>
@@ -437,11 +470,12 @@ function serialize() {
 // =====================================================================
 const idb = new Promise((ok, fail) => {
   if (!window.indexedDB) { fail(new Error("браузер не даёт локальное хранилище")); return; }
-  const r = indexedDB.open("voice-reader", 1);
+  const r = indexedDB.open("voice-reader", 2);
   r.onupgradeneeded = () => {
     const d = r.result;
-    d.createObjectStore("docs", { keyPath: "id" });
-    d.createObjectStore("versions", { keyPath: "vid", autoIncrement: true }).createIndex("docId", "docId");
+    if (!d.objectStoreNames.contains("docs")) d.createObjectStore("docs", { keyPath: "id" });
+    if (!d.objectStoreNames.contains("versions")) d.createObjectStore("versions", { keyPath: "vid", autoIncrement: true }).createIndex("docId", "docId");
+    if (!d.objectStoreNames.contains("projects")) d.createObjectStore("projects", { keyPath: "id" });
   };
   r.onsuccess = () => ok(r.result);
   r.onerror = () => fail(r.error);
@@ -481,7 +515,7 @@ const addVersion = (label) => addVersionFor(meta.id, serialize(), label);
 
 let saveTimer = null;
 function workingCopy() {
-  return { id: meta.id, name: meta.name, source: meta.source, path: meta.path, sha: meta.sha, repo: meta.repo || "",
+  return { id: meta.id, name: meta.name, source: meta.source, path: meta.path, sha: meta.sha, repo: meta.repo || "", project: meta.project || MISC,
            isMd: meta.isMd, text: serialize(), dirty, updated: Date.now() };
 }
 function saveWorking() {
@@ -519,6 +553,7 @@ function openDoc(text, m, keepPos = true, note = "") {
   meta = { source: "local", name: "Текст", isMd: false, path: "", sha: "", repo: "", ...m };
   if (!meta.id) meta.id = meta.source === "github" ? ghId(meta.path) : newLocalId();
   if (meta.source === "github" && !meta.repo) meta.repo = gh().repo;
+  if (!meta.project) meta.project = meta.source === "github" ? "gh:" + meta.repo : (curProject || MISC);
   doc = parseDoc(text, meta.isMd);
   buildSentences();
   history.length = 0;
@@ -588,51 +623,154 @@ $("versionsBtn").onclick = () => {
   if (!p.hidden) { $("notesPanel").hidden = true; renderVersions(); }
 };
 
-// ---------- library: texts on the phone ----------
-let pendingDelete = null, localRender = 0;
+// =====================================================================
+// Projects: each work is a folder of files on the phone.
+// GitHub chapters live in an automatic project named after the repository.
+// =====================================================================
+const MISC = "misc";
+let curProject = LS.get("curProject") || "";
+const newProjectId = () => "p:" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+const byName = (a, b) => a.name.localeCompare(b.name, "ru", { numeric: true });
+async function ensureProject(id, name) {
+  const p = await dbGet("projects", id);
+  if (!p) await dbPut("projects", { id, name, created: Date.now() });
+  return id;
+}
+const ghProjectId = () => "gh:" + gh().repo;
+const ensureGhProject = () => ensureProject(ghProjectId(), "☁ " + (gh().repo.split("/")[1] || gh().repo));
+const openLocal = (d) => openDoc(d.text, { ...d }, true,
+  d.source === "github" ? "Копия с телефона. Если глава менялась на компьютере, откройте её из списка GitHub." : "");
+function entry(title, subtitle, dirtySub) {
+  const b = document.createElement("button"); b.className = "entry";
+  const t = document.createElement("span"); t.className = "t"; t.textContent = title;
+  const sub = document.createElement("span"); sub.className = "s" + (dirtySub ? " dirty" : ""); sub.textContent = subtitle;
+  b.append(t, sub); return b;
+}
+const plural = (n, one, few, many) => n % 10 === 1 && n % 100 !== 11 ? one : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? few : many;
+
+// ---------- menu: continue card + project list ----------
+let localRender = 0;
 async function renderLocalDocs() {
   const my = ++localRender;                     // a newer call wins; stale ones stop
-  const box = document.createElement("div");
-  let docs;
-  try { docs = (await dbAll("docs")).sort((a, b) => b.updated - a.updated); }
-  catch (e) { $("localDocs").textContent = "Хранилище телефона недоступно: " + (e?.message || e); return; }
-  const openLocal = (d) => openDoc(d.text, { ...d }, true,
-    d.source === "github" ? "Копия с телефона. Если глава менялась на компьютере, откройте её из списка GitHub." : "");
-  // "Continue" card: the text opened last
-  const last = docs.find(d => d.id === LS.get("lastDoc")) || docs[0];
+  let docs, projects;
+  try { [docs, projects] = await Promise.all([dbAll("docs"), dbAll("projects")]); }
+  catch (e) { $("projects").textContent = "Хранилище телефона недоступно: " + (e?.message || e); return; }
+  if (my !== localRender) return;
+  const last = docs.find(d => d.id === LS.get("lastDoc")) || [...docs].sort((a, b) => b.updated - a.updated)[0];
   $("continueCard").hidden = !last;
   if (last) {
     const pos = +(LS.get("pos:" + last.id) || 0);
-    $("continueName").textContent = (last.source === "github" ? "☁ " : "📱 ") + last.name;
-    $("continueInfo").textContent = `${fmtDate(last.updated)}` + (pos ? ` · предложение ${pos + 1}` : "") + (last.dirty ? (last.source === "github" ? " · не отправлено в GitHub" : " · есть несохранённые правки") : "");
+    const proj = projects.find(p => p.id === last.project);
+    $("continueName").textContent = last.name;
+    $("continueInfo").textContent = (proj ? "📁 " + proj.name + " · " : "") + fmtDate(last.updated) + (pos ? ` · предложение ${pos + 1}` : "")
+      + (last.dirty ? (last.source === "github" ? " · не отправлено в GitHub" : " · есть несохранённые правки") : "");
     $("continueBtn").onclick = () => openLocal(last);
   }
-  if (!docs.length) { const p = document.createElement("small"); p.textContent = "Пока пусто. Откройте файл, вставьте текст или откройте главу из GitHub."; $("localDocs").replaceChildren(p); return; }
-  const counts = await Promise.all(docs.map(d => countVersions(d.id).catch(() => 0)));
-  if (my !== localRender) return;
-  docs.forEach((d, k) => {
-    const n = counts[k];
+  const box = document.createDocumentFragment();
+  const stats = new Map(projects.map(p => [p.id, { n: 0, updated: p.created || 0, dirty: 0 }]));
+  for (const d of docs) { const st = stats.get(d.project); if (st) { st.n++; st.updated = Math.max(st.updated, d.updated || 0); if (d.dirty) st.dirty++; } }
+  projects.sort((a, b) => stats.get(b.id).updated - stats.get(a.id).updated);
+  for (const p of projects) {
+    const st = stats.get(p.id);
     const row = document.createElement("div"); row.className = "item";
-    const b = document.createElement("button"); b.className = "entry";
-    const t = document.createElement("span"); t.className = "t"; t.textContent = (d.source === "github" ? "☁ " : "📱 ") + d.name;
-    const sub = document.createElement("span"); sub.className = "s" + (d.dirty ? " dirty" : "");
-    sub.textContent = `${fmtDate(d.updated)} · версий: ${n}` + (d.dirty ? (d.source === "github" ? " · ● не в GitHub" : " · ● есть правки") : "");
-    b.append(t, sub);
-    b.onclick = () => openLocal(d);
-    const del = document.createElement("button"); del.textContent = "🗑"; del.title = "Удалить с телефона"; del.className = "ghost"; del.setAttribute("aria-label", "Удалить " + d.name);
-    del.onclick = async () => {
-      if (pendingDelete !== d.id) { pendingDelete = d.id; libMsg(`Нажмите 🗑 ещё раз, чтобы удалить «${d.name}» и все его версии с телефона` + (d.source === "github" ? " (в GitHub глава останется)." : ".")); return; }
-      pendingDelete = null; await deleteDoc(d.id); libMsg(`«${d.name}» удалён с телефона.`); renderLocalDocs();
-    };
-    row.append(b, del); box.appendChild(row);
-  });
-  $("localDocs").replaceChildren(...box.childNodes);
+    const b = entry("📁 " + p.name, `${st.n} ${plural(st.n, "файл", "файла", "файлов")} · ${fmtDate(st.updated)}` + (st.dirty ? ` · ● правки в ${st.dirty}` : ""), st.dirty);
+    b.onclick = () => openProject(p.id);
+    row.appendChild(b); box.appendChild(row);
+  }
+  if (!projects.length) { const sm = document.createElement("small"); sm.textContent = "Проектов пока нет. Создайте первый — например, «Моя книга»."; box.appendChild(sm); }
+  $("projects").replaceChildren(box);
 }
+$("newProject").onclick = async () => {
+  const name = $("newProjectName").value.trim();
+  if (!name) { libMsg("Введите название проекта."); $("newProjectName").focus(); return; }
+  const id = newProjectId();
+  await dbPut("projects", { id, name, created: Date.now() });
+  $("newProjectName").value = "";
+  openProject(id);
+};
+$("newProjectName").addEventListener("keydown", (e) => { if (e.key === "Enter") $("newProject").click(); });
+
+// ---------- project screen ----------
+const projMsg = (t) => { $("projMsg").textContent = t; };
+function openProject(id) { curProject = id; LS.set("curProject", id); projMsg(""); go("proj"); }
+let pendingDelete = null, renaming = null, projRender = 0;
+async function renderProject() {
+  const my = ++projRender;
+  const p = await dbGet("projects", curProject).catch(() => null);
+  if (!p) { location.hash = ""; return; }
+  const files = (await dbAll("docs")).filter(d => d.project === p.id).sort(byName);
+  const counts = await Promise.all(files.map(d => countVersions(d.id).catch(() => 0)));
+  if (my !== projRender) return;
+  $("projTitle").textContent = "📁 " + p.name;
+  $("projInfo").textContent = `${files.length} ${plural(files.length, "файл", "файла", "файлов")}`;
+  const isGh = p.id.startsWith("gh:");
+  $("projDelete").textContent = isGh ? "🗑 Убрать копии с телефона" : "🗑 Удалить проект";
+  const box = document.createDocumentFragment();
+  files.forEach((d, k) => {
+    const row = document.createElement("div"); row.className = "item";
+    if (renaming === d.id) {
+      const inp = document.createElement("input"); inp.value = d.name; inp.setAttribute("aria-label", "Новое название");
+      const ok = document.createElement("button"); ok.className = "primary"; ok.textContent = "✓"; ok.setAttribute("aria-label", "Сохранить название");
+      const save = async () => {
+        const name = inp.value.trim(); renaming = null;
+        if (name && name !== d.name) {
+          await dbPut("docs", { ...d, name });
+          if (meta.id === d.id) { meta.name = name; $("docTitle").textContent = name; }
+        }
+        renderProject();
+      };
+      ok.onclick = save; inp.addEventListener("keydown", (e) => { if (e.key === "Enter") save(); if (e.key === "Escape") { renaming = null; renderProject(); } });
+      row.append(inp, ok); box.appendChild(row); setTimeout(() => inp.focus(), 0);
+      return;
+    }
+    const pos = +(LS.get("pos:" + d.id) || 0);
+    const b = entry((d.source === "github" ? "☁ " : "📄 ") + d.name,
+      `${fmtDate(d.updated)} · версий: ${counts[k]}` + (pos ? ` · предл. ${pos + 1}` : "") + (d.dirty ? (d.source === "github" ? " · ● не в GitHub" : " · ● есть правки") : ""), d.dirty);
+    b.onclick = () => openLocal(d);
+    const ren = document.createElement("button"); ren.className = "ghost"; ren.textContent = "✎"; ren.title = "Переименовать"; ren.setAttribute("aria-label", "Переименовать " + d.name);
+    ren.onclick = () => { renaming = d.id; renderProject(); };
+    const del = document.createElement("button"); del.className = "ghost"; del.textContent = "🗑"; del.title = "Удалить"; del.setAttribute("aria-label", "Удалить " + d.name);
+    del.onclick = async () => {
+      if (pendingDelete !== d.id) { pendingDelete = d.id; projMsg(`Нажмите 🗑 ещё раз, чтобы удалить «${d.name}» и все его версии` + (d.source === "github" ? " с телефона (в GitHub глава останется)." : ".")); return; }
+      pendingDelete = null; await deleteDoc(d.id); projMsg(`«${d.name}» удалён.`); renderProject();
+    };
+    row.append(b, ren, del); box.appendChild(row);
+  });
+  if (!files.length) { const sm = document.createElement("small"); sm.textContent = isGh ? "Откройте главу из списка GitHub в меню — её копия появится здесь." : "Пусто. Добавьте файлы с телефона, вставьте текст или создайте пустую главу."; box.appendChild(sm); }
+  $("projFiles").replaceChildren(box);
+}
+$("projBack").onclick = goBack;
+$("projMoreBtn").onclick = () => { $("projMenu").hidden = !$("projMenu").hidden; };
+$("projRename").onclick = async () => {
+  $("projMenu").hidden = true;
+  const p = await dbGet("projects", curProject);
+  $("projNameInput").value = p?.name || ""; $("projRenameRow").hidden = false; $("projNameInput").focus();
+};
+$("projRenameOk").onclick = async () => {
+  const name = $("projNameInput").value.trim(); if (!name) return;
+  const p = await dbGet("projects", curProject); await dbPut("projects", { ...p, name });
+  $("projRenameRow").hidden = true; renderProject();
+};
+let pendingProjDelete = false;
+$("projDelete").onclick = async () => {
+  $("projMenu").hidden = true;
+  const files = (await dbAll("docs")).filter(d => d.project === curProject);
+  if (!pendingProjDelete) {
+    pendingProjDelete = true;
+    projMsg(`Удалить проект и ${files.length} ${plural(files.length, "файл", "файла", "файлов")} со всеми версиями? Нажмите «Удалить» в меню ⋯ ещё раз.` + (curProject.startsWith("gh:") ? " В GitHub ничего не удалится." : " Это нельзя отменить — при необходимости сначала скачайте файлы."));
+    setTimeout(() => { pendingProjDelete = false; }, 15000);
+    return;
+  }
+  pendingProjDelete = false;
+  for (const d of files) await deleteDoc(d.id);
+  await dbReq("projects", "readwrite", st => st.delete(curProject));
+  libMsg("Проект удалён."); location.hash = "";
+};
 
 // ---------- backup of everything on the phone ----------
 $("backup").onclick = async () => {
   try {
-    const data = { app: "voice-reader", format: 1, at: new Date().toISOString(), docs: await dbAll("docs"), versions: await dbAll("versions") };
+    const data = { app: "voice-reader", format: 2, at: new Date().toISOString(), projects: await dbAll("projects"), docs: await dbAll("docs"), versions: await dbAll("versions") };
     downloadText(`voice-reader-backup-${data.at.slice(0, 10)}.json`, JSON.stringify(data));
     libMsg(`В копии текстов: ${data.docs.length}, версий: ${data.versions.length}.`);
   } catch (e) { libMsg("Не удалось сделать копию: " + (e?.message || e)); }
@@ -645,7 +783,9 @@ $("restoreFile").onchange = async () => {
     const data = JSON.parse(await f.text());
     if (data.app !== "voice-reader" || !Array.isArray(data.docs)) throw new Error("это не резервная копия этого приложения");
     let nd = 0, nv = 0;
+    for (const pr of data.projects || []) if (!(await dbGet("projects", pr.id))) await dbPut("projects", pr);
     for (const d of data.docs) {
+      if (!d.project || !(data.projects || []).some(pr => pr.id === d.project)) { d.project = d.project || MISC; await ensureProject(d.project, d.project === MISC ? "Разное" : "Восстановленное"); }
       const cur = await dbGet("docs", d.id);
       if (!cur || (d.updated || 0) > (cur.updated || 0)) { await dbPut("docs", d); nd++; }
     }
@@ -827,42 +967,85 @@ function targetIndex() {
 
 // ---------- library: local text and files ----------
 $("load").onclick = () => {
-  LS.set("text", $("input").value);
   const t = $("input").value;
-  $("pasteBox").hidden = true;
+  if (!t.trim()) { projMsg("Вставьте текст."); return; }
   const firstLine = t.trim().split("\n")[0].replace(/^#+\s*/, "").slice(0, 40);
-  openDoc(t, { source: "local", name: firstLine || "Вставленный текст", isMd: /^\s{0,3}(#{1,6}\s|[-*+]\s|>\s)/m.test(t) }, false);
+  const name = $("pasteName").value.trim() || firstLine || "Вставленный текст";
+  $("pasteBox").hidden = true; $("input").value = ""; $("pasteName").value = "";
+  openDoc(t, { source: "local", name, isMd: /^\s{0,3}(#{1,6}\s|[-*+]\s|>\s)/m.test(t), project: curProject }, false);
 };
 $("openFile").onclick = () => $("file").click();
+async function readUpload(f) {
+  if (isDocx(f.name)) return { text: await docxToMd(f), name: f.name.replace(/\.docx$/i, ""), isMd: true };
+  if (!/\.(md|markdown|txt)$/i.test(f.name)) throw new Error("поддерживаются .docx, .md, .txt");
+  return { text: (await f.text()).replace(/\r\n?/g, "\n"), name: f.name.replace(/\.(md|markdown|txt)$/i, ""), isMd: /\.(md|markdown)$/i.test(f.name) };
+}
 $("file").onchange = async () => {
-  const f = $("file").files[0];
-  if (!f) return;
-  $("file").value = "";
-  try {
-    if (isDocx(f.name)) openDoc(await docxToMd(f), { source: "local", name: f.name.replace(/\.docx$/i, ".md"), isMd: true }, false);
-    else openDoc(await f.text(), { source: "local", name: f.name, isMd: /\.(md|markdown)$/i.test(f.name) }, false);
-  } catch (e) { libMsg("Не удалось открыть файл: " + (e?.message || e)); }
+  const list = [...$("file").files]; $("file").value = "";
+  if (!list.length) return;
+  if (list.length === 1) {
+    try { const r = await readUpload(list[0]); openDoc(r.text, { source: "local", name: r.name, isMd: r.isMd, project: curProject }, false); }
+    catch (e) { projMsg("Не удалось открыть файл: " + (e?.message || e)); }
+    return;
+  }
+  const done = [], failed = [];
+  for (const [k, f] of list.entries()) {
+    projMsg(`Добавляю ${k + 1} из ${list.length}: ${f.name}…`);
+    try {
+      const r = await readUpload(f);
+      const id = newLocalId();
+      await dbPut("docs", { id, name: r.name, source: "local", path: "", sha: "", repo: "", project: curProject, isMd: r.isMd, text: r.text, dirty: false, updated: Date.now() });
+      await addVersionFor(id, r.text, "исходный текст");
+      done.push(r.name);
+    } catch (e) { failed.push(`${f.name} (${e?.message || e})`); }
+  }
+  projMsg((done.length ? `Добавлено: ${done.join(", ")}.` : "") + (failed.length ? ` Не удалось: ${failed.join("; ")}.` : ""));
+  renderProject();
 };
+$("newFile").onclick = () => {
+  const name = $("newFileName").value.trim();
+  if (!name) { projMsg("Введите название главы."); $("newFileName").focus(); return; }
+  $("newFileName").value = "";
+  openDoc(`# ${name}\n`, { source: "local", name, isMd: true, project: curProject }, false);
+};
+$("newFileName").addEventListener("keydown", (e) => { if (e.key === "Enter") $("newFile").click(); });
 // ---------- screens & navigation (hash routing, so the phone's Back button works) ----------
-const VIEWS = { "": "libraryView", read: "readerView", settings: "settingsView" };
+const VIEWS = { "": "libraryView", proj: "projectView", read: "readerView", settings: "settingsView" };
 function show(view) {
   for (const [k, id] of Object.entries(VIEWS)) $(id).hidden = k !== view;
-  $("moreMenu").hidden = true;
+  $("moreMenu").hidden = true; $("projMenu").hidden = true;
   window.scrollTo(0, 0);
 }
-let navDepth = 0;
+// Screens visited in this session; Back walks this stack, never into a previous session's history.
+let navStack = [location.hash.slice(1)];
+const curView = () => location.hash.slice(1);
 function go(view) {
-  if ((location.hash.slice(1) || "") === view) { route(); return; }
-  navDepth++; location.hash = view;
+  if (curView() === view) { route(); return; }
+  navStack.push(view); location.hash = view;
 }
-function goBack() { if (navDepth > 0) window.history.back(); else { location.hash = ""; } }
+function goBack() {
+  if (navStack.length >= 2) { window.history.back(); return; }
+  const parent = curView() === "read" && curProject ? "proj" : "";
+  navStack = [parent];
+  location.replace("#" + parent);
+}
 function route() {
   const v = location.hash.slice(1);
   if (v === "read" && meta.id) { if (saveTimer) saveWorking(); show("read"); highlight(); }
+  else if (v === "read") {                      // page reloaded while reading: reopen the last text
+    dbGet("docs", LS.get("lastDoc") || "").then(d => { if (d) { if (d.project) curProject = d.project; openLocal(d); } else location.replace("#"); })
+      .catch(() => location.replace("#"));
+  }
   else if (v === "settings") { stop(); show("settings"); }
+  else if (v === "proj" && curProject) { stop(); wakeStop(); if (saveTimer) saveWorking(); show("proj"); renderProject(); }
   else showLibrary();
 }
-window.addEventListener("hashchange", () => { if (navDepth > 0 && !location.hash.slice(1)) navDepth = 0; route(); });
+window.addEventListener("hashchange", () => {
+  const v = curView();
+  if (navStack.length >= 2 && navStack[navStack.length - 2] === v) navStack.pop();
+  else if (navStack[navStack.length - 1] !== v) navStack.push(v);
+  route();
+});
 function panelHead(h, panel) {
   const d = document.createElement("div"); d.className = "card-head";
   const x = document.createElement("button"); x.className = "icon"; x.textContent = "✕"; x.setAttribute("aria-label", "Закрыть");
@@ -872,6 +1055,7 @@ function panelHead(h, panel) {
 document.addEventListener("click", (e) => {
   const c = e.target.closest?.("[data-close]"); if (c) $(c.dataset.close).hidden = true;
   if (!$("moreMenu").hidden && !e.target.closest("#moreMenu") && !e.target.closest("#moreBtn")) $("moreMenu").hidden = true;
+  if (!$("projMenu").hidden && !e.target.closest("#projMenu") && !e.target.closest("#projMoreBtn")) $("projMenu").hidden = true;
 });
 $("moreBtn").onclick = () => { $("moreMenu").hidden = !$("moreMenu").hidden; };
 for (const id of ["notesBtn", "versionsBtn", "typeBtn", "download", "helpBtn", "settingsBtn2"]) $(id).addEventListener("click", () => { $("moreMenu").hidden = true; });
@@ -1074,7 +1258,8 @@ async function openChapter(path, name) {
       note = "Глава изменилась на GitHub. Ваши неотправленные правки сохранены в «🕘 Версии».";
     }
     const text = f.encoding === "base64" && f.content ? b64decode(f.content) : await ghApi(path, { raw: true });
-    openDoc(text, { id, source: "github", name: name.replace(/\.(md|markdown|txt)$/i, ""), isMd: !/\.txt$/i.test(name), path, sha: f.sha, repo: gh().repo }, true, note);
+    await ensureGhProject();
+    openDoc(text, { id, project: ghProjectId(), source: "github", name: name.replace(/\.(md|markdown|txt)$/i, ""), isMd: !/\.txt$/i.test(name), path, sha: f.sha, repo: gh().repo }, true, note);
     libMsg("");
   } catch (e) { libMsg(e.message); }
 }
@@ -1110,7 +1295,8 @@ $("newChapter").onclick = async () => {
   try {
     const res = await ghApi(path, { method: "PUT", body: { message: `Новая глава: ${name}`, content: b64encode(`# ${name}\n`) } });
     $("newName").value = "";
-    openDoc(`# ${name}\n`, { source: "github", name, isMd: true, path, sha: res.content.sha }, false);
+    await ensureGhProject();
+    openDoc(`# ${name}\n`, { source: "github", name, isMd: true, path, sha: res.content.sha, project: ghProjectId() }, false);
     listChapters();
   } catch (e) { libMsg(e.status === 422 ? "Глава с таким названием уже есть." : e.message); }
 };
@@ -1416,6 +1602,15 @@ syncCloudUI();
       await dbPut("docs", { id: newLocalId(), name: m.name || "Последний текст", source: "local", path: "", sha: "", repo: "", isMd: !!m.isMd, text: old, dirty: false, updated: Date.now() });
     }
     if (old) { localStorage.removeItem("doc"); localStorage.removeItem("meta"); }
+    // texts from before projects existed go to "Разное" (GitHub copies to their repository's project)
+    const [docs, projects] = await Promise.all([dbAll("docs"), dbAll("projects")]);
+    const known = new Set(projects.map(p => p.id));
+    for (const d of docs) {
+      if (d.project && known.has(d.project)) continue;
+      if (d.source === "github" && d.repo) { d.project = "gh:" + d.repo; await ensureProject(d.project, "☁ " + (d.repo.split("/")[1] || d.repo)); }
+      else { d.project = MISC; await ensureProject(MISC, "Разное"); }
+      known.add(d.project); await dbPut("docs", d);
+    }
   } catch {}
   renderLocalDocs();
 })();
