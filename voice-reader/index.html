@@ -98,13 +98,14 @@
   .panel .item { display:flex; gap:8px; align-items:center; padding:8px 0; border-top:1px solid var(--line); }
   .panel .item .txt { flex:1; min-width:0; cursor:pointer; }
   .panel .item .q { color: var(--muted); font-size: 14px; }
-  #typedRow { margin-bottom: 12px; }
+  #typedRow { margin-bottom: 12px; position: sticky; top: calc(62px + env(safe-area-inset-top, 0px)); z-index: 4; box-shadow: 0 8px 24px rgba(0,0,0,.12); }
+  #typed { font-family: var(--read); font-size: 18px; line-height: 1.6; min-height: 120px; max-height: 45vh; }
 
   /* bottom dock */
   .dock { position: fixed; left:0; right:0; bottom:0; z-index: 6; background: var(--surface); border-top:1px solid var(--line);
           padding: 8px max(12px, env(safe-area-inset-right, 0px)) calc(8px + env(safe-area-inset-bottom, 0px)) max(12px, env(safe-area-inset-left, 0px)); }
   .dock-inner { max-width: 760px; margin: 0 auto; display:flex; flex-direction:column; gap:8px; }
-  #actions { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+  #actions { display: grid; grid-template-columns: repeat(6, 1fr); gap: 5px; }
   #actions button { display:flex; flex-direction:column; align-items:center; gap:2px; padding: 6px 2px; font-size: 12px; line-height:1.1; background: var(--surface2); }
   #actions button .i { font-size: 20px; }
   #actions button.listening { background:var(--flag); color:#fff; animation: pulse 1s infinite; }
@@ -264,21 +265,24 @@
   <div id="moreMenu" class="menu" hidden>
     <button id="notesBtn">📋 Заметки и флажки</button>
     <button id="versionsBtn">🕘 Версии</button>
-    <button id="typeBtn">⌨ Ввести текстом</button>
+    <button id="typeBtn">⌨ Писать текстом</button>
     <button id="download">⬇ Скачать файл</button>
     <button id="helpBtn">❔ Как пользоваться</button>
     <button id="settingsBtn2">⚙ Настройки</button>
   </div>
-  <div id="typedRow" class="card" hidden>
-    <input id="typed" placeholder="Напишите текст">
+  <div id="typedRow" class="card editor" hidden>
+    <select id="typedMode" aria-label="Что сделать">
+      <option value="edit">✎ Изменить предложение</option>
+      <option value="editPara">✎ Изменить весь абзац</option>
+      <option value="add">➕ Добавить фразу после</option>
+      <option value="para">¶ Новый абзац после</option>
+      <option value="note">📝 Заметка к предложению</option>
+    </select>
+    <textarea id="typed" rows="4" placeholder="Напишите текст"></textarea>
+    <small id="typedHint">Текст сохранится ровно так, как написан. Пустая строка между абзацами создаёт новый абзац.</small>
     <div class="row">
-      <select id="typedMode" class="grow">
-        <option value="edit">Заменить предложение</option>
-        <option value="add">Добавить фразу после</option>
-        <option value="para">Новый абзац после</option>
-        <option value="note">Заметка к предложению</option>
-      </select>
       <button id="typedGo" class="primary">Применить</button>
+      <button id="typedCancel">Отмена</button>
     </div>
   </div>
   <div id="helpPanel" class="card panel" hidden>
@@ -301,6 +305,7 @@
         <button id="para" title="Клавиша P"><span class="i">¶</span>Абзац</button>
         <button id="note" title="Клавиша N"><span class="i">📝</span>Заметка</button>
         <button id="flag" title="Клавиша F"><span class="i">🚩</span>Флажок</button>
+        <button id="typeDock" title="Клавиша T"><span class="i">⌨</span>Текст</button>
       </div>
       <div class="player">
         <button id="undo" aria-label="Отменить" title="Отменить">↶</button>
@@ -883,6 +888,7 @@ $("reader").onclick = (e) => {
   if (n !== undefined) { status("📝 " + sentences[+n].notes.join(" · ")); return; }
   const i = e.target.dataset?.i;
   if (i === undefined) return;
+  if (!$("typedRow").hidden) { stop(); idx = editTarget = +i; highlight(); fillEditor(); return; }
   stop(); idx = +i; highlight(); play();
 };
 
@@ -1103,7 +1109,7 @@ document.addEventListener("click", (e) => {
 });
 $("moreBtn").onclick = () => { $("moreMenu").hidden = !$("moreMenu").hidden; };
 for (const id of ["notesBtn", "versionsBtn", "typeBtn", "download", "helpBtn", "settingsBtn2"]) $(id).addEventListener("click", () => { $("moreMenu").hidden = true; });
-$("typeBtn").onclick = () => { $("typedRow").hidden = !$("typedRow").hidden; if (!$("typedRow").hidden) $("typed").focus(); };
+$("typeBtn").onclick = () => openEditor("edit");
 $("helpBtn").onclick = () => { $("helpPanel").hidden = !$("helpPanel").hidden; };
 $("settingsBtn").onclick = () => go("settings");
 $("settingsBtn2").onclick = () => go("settings");
@@ -1383,44 +1389,91 @@ function dictate(t) {
 const noteText = (t) => t.trim().replace(/^(?:ну\s+)?(?:заметка|заметку|запиши заметку|пометка|комментарий)[\s,.:—–-]*/i, "").trim();
 
 // ---------- changes ----------
-function applyAdd(i, command) {
-  const out = dictate(command);
+const clean = (t) => t.replace(/\r/g, "").replace(/[ \t]+/g, " ").trim();
+const paragraphsOf = (t) => clean(t).split(/\n\s*\n/).map(x => x.replace(/\s*\n\s*/g, " ").trim()).filter(Boolean);
+const mkSentences = (text, p) => split(text).map(t => ({ text: t, p, edited: true, flag: false, notes: [] }));
+
+function applyAdd(i, command, raw = false) {
+  const out = raw ? clean(command).replace(/\s*\n\s*/g, " ") : dictate(command);
   if (!out) { status("Не расслышал текст. Попробуйте ещё раз."); return; }
   snapshot(i);
   const p = sentences[i]?.p ?? 0;
-  if (!sentences.length) return applyPara(-1, command);
+  if (!sentences.length) return applyPara(-1, command, raw);
   doc.blocks[p].dirty = true;
-  const added = split(out).map(text => ({ text, p, edited: true, flag: false, notes: [] }));
+  const added = mkSentences(out, p);
   sentences.splice(i + 1, 0, ...added);
   idx = i + 1;
   markDirty(); render(); status(`Добавлено: «${out}»`); play();
 }
 
-// New paragraph after the block that holds sentence i (i = -1: at the end of the text).
-function applyPara(i, command) {
-  const out = dictate(command);
-  if (!out) { status("Не расслышал текст. Попробуйте ещё раз."); return; }
-  if (i >= 0 || sentences.length) snapshot(i);
-  const cur = i >= 0 ? sentences[i].p : doc.blocks.length - 1;
-  const nb = { kind: "text", prefix: "", raw: "", content: "", heading: false, dirty: true, after: "" };
-  if (cur >= 0) {
-    const prevAfter = doc.blocks[cur].after;
-    const isLast = cur === doc.blocks.length - 1;
-    nb.after = isLast ? (prevAfter || "\n") : prevAfter === "\n" ? "\n\n" : prevAfter;
-    doc.blocks[cur].after = "\n\n";
-  } else if (!doc.lead) nb.after = "\n";
-  doc.blocks.splice(cur + 1, 0, nb);
-  sentences.forEach(s => { if (s.p > cur) s.p++; });
-  let at = sentences.length;
-  for (let k = 0; k < sentences.length; k++) if (sentences[k].p > cur + 1) { at = k; break; }
-  const added = split(out).map(text => ({ text, p: cur + 1, edited: true, flag: false, notes: [] }));
-  sentences.splice(at, 0, ...added);
-  idx = at;
-  markDirty(); render(); status(`Новый абзац: «${out}»`); play();
+// Insert paragraphs (each a string) after block `cur` (-1: at the start of an empty text).
+// Returns the index of the first inserted sentence.
+function insertParagraphs(cur, texts) {
+  let first = -1;
+  for (const text of texts) {
+    const nb = { kind: "text", prefix: "", raw: "", content: "", heading: false, dirty: true, after: "" };
+    if (cur >= 0) {
+      const prevAfter = doc.blocks[cur].after;
+      const isLast = cur === doc.blocks.length - 1;
+      nb.after = isLast ? (prevAfter || "\n") : prevAfter === "\n" ? "\n\n" : prevAfter;
+      doc.blocks[cur].after = "\n\n";
+    } else if (!doc.lead) nb.after = "\n";
+    doc.blocks.splice(cur + 1, 0, nb);
+    sentences.forEach(s => { if (s.p > cur) s.p++; });
+    let at = sentences.length;
+    for (let k = 0; k < sentences.length; k++) if (sentences[k].p > cur + 1) { at = k; break; }
+    sentences.splice(at, 0, ...mkSentences(text, cur + 1));
+    if (first < 0) first = at;
+    cur++;
+  }
+  return first;
 }
 
-function applyNote(i, command) {
-  const t = noteText(command);
+// New paragraph(s) after the block that holds sentence i (i = -1: at the end of the text).
+function applyPara(i, command, raw = false) {
+  const texts = raw ? paragraphsOf(command) : [dictate(command)].filter(Boolean);
+  if (!texts.length) { status(raw ? "Напишите текст." : "Не расслышал текст. Попробуйте ещё раз."); return; }
+  if (i >= 0 || sentences.length) snapshot(i);
+  const cur = i >= 0 ? sentences[i].p : doc.blocks.length - 1;
+  idx = insertParagraphs(cur, texts);
+  markDirty(); render();
+  status(texts.length > 1 ? `Добавлено абзацев: ${texts.length}.` : `Новый абзац: «${texts[0]}»`);
+  play();
+}
+
+// Typed replacement of one sentence (kept exactly as written; empty = delete).
+function replaceSentence(i, text) {
+  snapshot(i);
+  const old = sentences[i];
+  const replacement = mkSentences(clean(text).replace(/\s*\n\s*/g, " "), old.p);
+  if (replacement.length) { replacement[0].notes = old.notes; replacement[0].flag = old.flag; }
+  sentences.splice(i, 1, ...replacement);
+  doc.blocks[old.p].dirty = true;
+  idx = Math.min(i, sentences.length - 1);
+  markDirty(); render();
+  status(replacement.length ? "Предложение изменено." : "Предложение удалено.");
+}
+
+// Typed replacement of the whole paragraph holding sentence i; extra paragraphs are inserted after it.
+function replaceParagraph(i, text) {
+  snapshot(i);
+  const p = sentences[i].p;
+  const texts = paragraphsOf(text);
+  const start = sentences.findIndex(s => s.p === p);
+  const old = sentences.filter(s => s.p === p);
+  const notes = old.flatMap(s => s.notes), flag = old.some(s => s.flag);
+  const first = mkSentences(texts[0] || "", p);
+  if (first.length) { first[0].notes = notes; first[0].flag = flag; }
+  sentences.splice(start, old.length, ...first);
+  doc.blocks[p].dirty = true;
+  if (texts.length > 1) insertParagraphs(p, texts.slice(1));
+  idx = Math.min(start, sentences.length - 1);
+  markDirty(); render();
+  status(!texts.length ? "Абзац удалён." : texts.length > 1 ? `Абзац изменён, добавлено ещё ${texts.length - 1}.` : "Абзац изменён.");
+}
+
+function applyNote(i, command, raw = false) {
+  const t = raw ? clean(command).replace(/\s*\n\s*/g, " ") : noteText(command);
   if (!t || !sentences[i]) { status("Не расслышал заметку. Попробуйте ещё раз."); return; }
   snapshot(i);
   sentences[i].notes.push(t);
@@ -1588,18 +1641,44 @@ document.addEventListener("keydown", (e) => {
   if (map[k]) { e.preventDefault(); listen(map[k]); }
   if (k === "f" || k === "а") { e.preventDefault(); toggleFlag(); }
   if (k === " ") { e.preventDefault(); playing ? stop() : play(); }
+  if (k === "t" || k === "е") { e.preventDefault(); openEditor("edit"); }
 });
-function typedSubmit() {
-  const text = $("typed").value.trim();
+// ---------- typing editor ----------
+let editTarget = -1;
+function paragraphText(i) { const p = sentences[i]?.p; return sentences.filter(s => s.p === p).map(s => s.text).join(" "); }
+function fillEditor() {
   const mode = $("typedMode").value;
-  if (!text) return;
-  if (mode !== "para" && !sentences.length) { status("Текст пустой: выберите «Новый абзац»."); return; }
-  const target = sentences.length ? targetIndex() : -1;
-  stop(); if (target >= 0) { idx = target; highlight(); }
-  $("typed").value = "";
-  done(mode, target, text);
+  $("typed").value = mode === "edit" ? (sentences[editTarget]?.text || "") : mode === "editPara" ? paragraphText(editTarget) : "";
+  $("typed").placeholder = { edit: "Текст предложения", editPara: "Текст абзаца", add: "Что добавить после выделенного предложения", para: "Текст нового абзаца", note: "Текст заметки" }[mode];
 }
-$("typed").addEventListener("keydown", (e) => { if (e.key === "Enter") typedSubmit(); });
+function openEditor(mode) {
+  if (!sentences.length) mode = "para";
+  editTarget = sentences.length ? targetIndex() : -1;
+  stop(); if (editTarget >= 0) { idx = editTarget; highlight(); }
+  if (mode) $("typedMode").value = mode;
+  fillEditor();
+  $("typedRow").hidden = false;
+  const t = $("typed"); t.focus(); t.setSelectionRange(t.value.length, t.value.length);
+}
+function closeEditor() { $("typedRow").hidden = true; $("typed").blur(); }
+$("typedMode").onchange = fillEditor;
+$("typeDock").onclick = () => $("typedRow").hidden ? openEditor("edit") : closeEditor();
+$("typedCancel").onclick = closeEditor;
+function typedSubmit() {
+  const text = $("typed").value;
+  const mode = $("typedMode").value;
+  if (!sentences.length && mode !== "para") { status("Текст пустой: выберите «Новый абзац»."); return; }
+  if (!text.trim() && !(mode === "edit" || mode === "editPara")) { $("typed").focus(); return; }
+  const target = editTarget >= 0 && editTarget < sentences.length ? editTarget : (sentences.length ? idx : -1);
+  stop();
+  closeEditor(); $("typed").value = "";
+  if (mode === "edit") replaceSentence(target, text);
+  else if (mode === "editPara") replaceParagraph(target, text);
+  else if (mode === "add") applyAdd(target, text, true);
+  else if (mode === "para") applyPara(target, text, true);
+  else applyNote(target, text, true);
+}
+$("typed").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); typedSubmit(); } if (e.key === "Escape") closeEditor(); });
 $("typedGo").onclick = typedSubmit;
 
 // ---------- hands-free voice commands (experimental, browser speech recognition only) ----------
