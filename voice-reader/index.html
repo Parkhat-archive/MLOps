@@ -138,6 +138,12 @@
         <input id="newProjectName" class="grow" placeholder="Название нового проекта">
         <button id="newProject" class="primary">＋ Проект</button>
       </div>
+      <div class="bigbtns">
+        <button id="importFolder">📂 Проект из папки<br><small>все файлы папки телефона</small></button>
+        <button id="importFiles">🗂 Проект из файлов<br><small>отметьте несколько файлов</small></button>
+      </div>
+      <input type="file" id="folderInput" webkitdirectory multiple hidden>
+      <input type="file" id="filesInput" multiple accept=".docx,.md,.markdown,.txt,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
       <details>
         <summary>Резервная копия</summary>
         <div class="stack" style="margin-top:10px">
@@ -689,6 +695,44 @@ $("newProject").onclick = async () => {
   openProject(id);
 };
 $("newProjectName").addEventListener("keydown", (e) => { if (e.key === "Enter") $("newProject").click(); });
+
+// ---------- new project from a phone folder (or from several picked files) ----------
+// The folder is copied: files inside the app are edited, the originals on the phone stay as they are.
+$("importFolder").onclick = () => $("folderInput").click();
+$("importFiles").onclick = () => $("filesInput").click();
+$("folderInput").onchange = () => importAsProject([...$("folderInput").files], "folderInput");
+$("filesInput").onchange = () => importAsProject([...$("filesInput").files], "filesInput");
+async function importAsProject(all, inputId) {
+  $(inputId).value = "";
+  if (!all.length) return;
+  const rel = (f) => (f.webkitRelativePath || f.name).split("/");
+  const fromFolder = all.some(f => f.webkitRelativePath);
+  const folderName = fromFolder ? rel(all[0])[0] : "";
+  const files = all.filter(f => /\.(docx|md|markdown|txt)$/i.test(f.name) && !rel(f).some(seg => seg.startsWith(".")))
+    .sort((a, b) => rel(a).join("/").localeCompare(rel(b).join("/"), "ru", { numeric: true }));
+  if (!files.length) { libMsg(`В ${fromFolder ? "папке «" + folderName + "»" : "выбранном"} нет файлов .docx, .md или .txt.`); return; }
+  const name = $("newProjectName").value.trim() || folderName || "Новый проект";
+  const id = newProjectId();
+  await dbPut("projects", { id, name, created: Date.now() });
+  $("newProjectName").value = "";
+  const failed = []; let n = 0;
+  for (const [k, f] of files.entries()) {
+    libMsg(`Импорт ${k + 1} из ${files.length}: ${f.name}…`);
+    try {
+      const r = await readUpload(f);
+      const parts = rel(f); if (fromFolder) parts.shift();          // drop the folder's own name
+      parts[parts.length - 1] = r.name;
+      const docId = newLocalId();
+      await dbPut("docs", { id: docId, name: parts.join(" / "), source: "local", path: "", sha: "", repo: "", project: id, isMd: r.isMd, text: r.text, dirty: false, updated: Date.now() });
+      await addVersionFor(docId, r.text, "исходный текст");
+      n++;
+    } catch (e) { failed.push(`${f.name} (${e?.message || e})`); }
+  }
+  const skipped = all.length - files.length;
+  libMsg("");
+  openProject(id);
+  projMsg(`Проект «${name}»: импортировано ${n} ${plural(n, "файл", "файла", "файлов")}.` + (skipped ? ` Пропущено других файлов: ${skipped}.` : "") + (failed.length ? ` Не удалось: ${failed.join("; ")}.` : ""));
+}
 
 // ---------- project screen ----------
 const projMsg = (t) => { $("projMsg").textContent = t; };
