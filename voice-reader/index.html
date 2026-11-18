@@ -228,7 +228,15 @@
       <h2>Голос</h2>
       <label class="stack"><span class="muted">Голос</span><select id="voice"></select></label>
       <label class="stack"><span class="muted">Скорость: <span id="rateVal">1.0</span></span><input id="rate" type="range" min="0.5" max="2" step="0.1" value="1" style="padding:0"></label>
-      <small>Голоса лучше: Android → Настройки → Синтез речи → Google → Установка голосовых данных → Русский.</small>
+      <div id="piperBox" class="stack">
+        <small>Голоса <b>Piper</b> — нейросеть, работает прямо в телефоне и без интернета. Один раз скачивается модель (~60 МБ на голос, лучше по Wi-Fi).</small>
+        <div class="row">
+          <button id="piperDownload">⬇ Скачать выбранный голос</button>
+          <button id="piperClear" class="ghost">Удалить скачанные</button>
+        </div>
+        <small id="piperState"></small>
+      </div>
+      <small>Системные голоса лучше: Android → Настройки → Синтез речи → Google → Установка голосовых данных → Русский.</small>
     </section>
     <section class="card">
       <h2>Книга на GitHub</h2>
@@ -346,7 +354,7 @@ setTimeout(() => {
   const ru = all.filter(v => v.lang.toLowerCase().startsWith("ru")).length;
   $("diag").textContent = `Диагностика: голос Claude — ${T ? "есть" : "нет"}; диктовка Claude — ${CD ? "есть" : "нет"}; `
     + `платформа claude.ai — ${inArtifact ? "да" : "нет"}; системных голосов — ${all.length} (рус. ${ru}); `
-    + `распознавание браузера — ${SR ? "есть" : "нет"}; ${navigator.userAgent}`;
+    + `распознавание браузера — ${SR ? "есть" : "нет"}; Piper — ${piperOk ? (piper.session ? "загружен " + piper.voice : "доступен") : "нет"}; ${navigator.userAgent}`;
 }, 11000);
 
 // =====================================================================
@@ -947,6 +955,143 @@ $("rate").oninput = () => { $("rateVal").textContent = (+$("rate").value).toFixe
 $("input").value = LS.get("text") || "Пример текста: замените его своим. Утро выдалось тихим и туманным. Мы вышли из дома рано, когда улицы ещё спали.";
 
 const CLAUDE_VOICES = { buttery: "Мягкий", airy: "Лёгкий", glassy: "Звонкий", rounded: "Округлый" };
+
+// =====================================================================
+// Piper: neural voices that run on the phone (onnxruntime-web + espeak phonemizer in wasm).
+// The model is downloaded once and kept in the browser's cache; the session is reused, and the
+// next sentence is synthesized while the current one plays.
+// =====================================================================
+const PIPER = {
+  ORT: "https://cdnjs.cloudflare.com/ajax/libs/onnxruntime-web/1.18.0/",
+  PHON_JS: "https://cdn.jsdelivr.net/npm/@diffusionstudio/vits-web@1.0.3/dist/piper-DeOu3H9E.js",
+  PHON: "https://cdn.jsdelivr.net/npm/@diffusionstudio/piper-wasm@1.0.0/build/piper_phonemize",
+  MODELS: "https://huggingface.co/diffusionstudio/piper-voices/resolve/main/ru/ru_RU/",
+  VOICES: { "ru_RU-irina-medium": "Ирина", "ru_RU-denis-medium": "Денис", "ru_RU-dmitri-medium": "Дмитрий", "ru_RU-ruslan-medium": "Руслан" },
+};
+const piperOk = !inArtifact && typeof WebAssembly === "object";
+const isPiper = () => $("voice").value.startsWith("piper:");
+const piperVoice = () => $("voice").value.slice(6);
+const modelUrl = (id) => { const [, name, q] = id.split("-"); return `${PIPER.MODELS}${name}/${q}/${id}.onnx`; };
+const loaded = {};
+function loadScript(url) {
+  return loaded[url] ||= new Promise((ok, fail) => {
+    const sc = document.createElement("script"); sc.src = url; sc.onload = ok;
+    sc.onerror = () => { delete loaded[url]; fail(new Error("не загрузился " + url.split("/").pop())); };
+    document.head.appendChild(sc);
+  });
+}
+async function cachedFetch(url, onProgress) {
+  const cache = window.caches ? await caches.open("piper-voices").catch(() => null) : null;
+  const hit = cache && await cache.match(url);
+  if (hit) return hit.arrayBuffer();
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`сервер ответил ${res.status}`);
+  const total = +(res.headers.get("Content-Length") || 0);
+  const reader = res.body.getReader(); const chunks = []; let got = 0;
+  for (;;) {
+    const { done, value } = await reader.read(); if (done) break;
+    chunks.push(value); got += value.length; if (onProgress && total) onProgress(got / total);
+  }
+  const buf = await new Blob(chunks).arrayBuffer();
+  if (cache) await cache.put(url, new Response(buf.slice(0), { headers: { "Content-Type": "application/octet-stream" } })).catch(() => {});
+  return buf;
+}
+const piper = { voice: "", session: null, cfg: null, loading: null, phon: null };
+function piperLoad(voice, onProgress) {
+  if (piper.voice === voice && piper.session) return Promise.resolve();
+  if (piper.loading && piper.loadingVoice === voice) return piper.loading;
+  piper.loadingVoice = voice;
+  piper.loading = (async () => {
+    await loadScript(PIPER.ORT + "ort.min.js");
+    window.ort.env.wasm.wasmPaths = PIPER.ORT;
+    window.ort.env.wasm.numThreads = 1;
+    piper.phon ||= await import(PIPER.PHON_JS);
+    // phonemizer files: fetched once, kept in the cache (offline) and handed to every run from memory
+    piper.phonWasm ||= await cachedFetch(PIPER.PHON + ".wasm");
+    piper.phonDataUrl ||= URL.createObjectURL(new Blob([await cachedFetch(PIPER.PHON + ".data")]));
+    const cfg = JSON.parse(new TextDecoder().decode(await cachedFetch(modelUrl(voice) + ".json")));
+    const model = await cachedFetch(modelUrl(voice), onProgress);
+    const session = await window.ort.InferenceSession.create(model);
+    Object.assign(piper, { voice, session, cfg });
+  })().finally(() => { piper.loading = null; });
+  return piper.loading;
+}
+function phonemize(text, espeakVoice) {
+  return new Promise((ok, fail) => {
+    let done = false;
+    piper.phon.createPiperPhonemize({
+      print: (line) => { if (!done) { done = true; ok(JSON.parse(line).phoneme_ids); } },
+      printErr: (line) => console.warn("phonemize:", line),
+      wasmBinary: piper.phonWasm,
+      locateFile: (f) => f.endsWith(".data") ? piper.phonDataUrl : f.endsWith(".wasm") ? PIPER.PHON + ".wasm" : f,
+    }).then(m => {
+      m.callMain(["-l", espeakVoice, "--input", JSON.stringify([{ text }]), "--espeak_data", "/espeak-ng-data"]);
+      if (!done) fail(new Error("не удалось разобрать текст"));
+    }).catch(fail);
+  });
+}
+async function piperSynth(text, rate, onProgress) {
+  const voice = piperVoice();
+  await piperLoad(voice, onProgress);
+  const { session, cfg } = piper, ort = window.ort;
+  const ids = await phonemize(text, cfg.espeak.voice);
+  const feeds = {
+    input: new ort.Tensor("int64", BigInt64Array.from(ids, BigInt), [1, ids.length]),
+    input_lengths: new ort.Tensor("int64", BigInt64Array.from([BigInt(ids.length)]), [1]),
+    scales: new ort.Tensor("float32", Float32Array.from([cfg.inference.noise_scale, cfg.inference.length_scale / rate, cfg.inference.noise_w]), [3]),
+  };
+  if (cfg.speaker_id_map && Object.keys(cfg.speaker_id_map).length) feeds.sid = new ort.Tensor("int64", BigInt64Array.from([0n]), [1]);
+  const out = await session.run(feeds);
+  return { data: out.output.data, sampleRate: cfg.audio.sample_rate };
+}
+// small cache of synthesized sentences (current + prefetched next)
+const piperCache = new Map();
+function piperAudio(text, onProgress) {
+  const rate = Math.min(2, Math.max(0.5, +$("rate").value));
+  const key = `${piperVoice()}|${rate}|${text}`;
+  if (!piperCache.has(key)) {
+    const pr = piperSynth(text, rate, onProgress);
+    pr.catch(() => piperCache.delete(key));
+    piperCache.set(key, pr);
+    while (piperCache.size > 6) piperCache.delete(piperCache.keys().next().value);
+  }
+  return piperCache.get(key);
+}
+let audioCtx = null, curSrc = null;
+const getCtx = () => audioCtx ||= new (window.AudioContext || window.webkitAudioContext)();
+function piperSpeak() {
+  const my = ++ttsToken;
+  const text = sentences[idx].text;
+  const firstLoad = !(piper.session && piper.voice === piperVoice());
+  if (firstLoad) status("Загружаю голос Piper…");
+  piperAudio(text, (f) => { if (my === ttsToken) status(`Скачиваю голос Piper: ${Math.round(f * 100)}% — один раз, дальше работает без интернета.`); })
+    .then(({ data, sampleRate }) => {
+      if (my !== ttsToken || !playing) return;
+      if (firstLoad) status("");
+      const ctx = getCtx(); ctx.resume?.();
+      const buf = ctx.createBuffer(1, data.length, sampleRate);
+      buf.copyToChannel(data instanceof Float32Array ? data : Float32Array.from(data), 0);
+      const src = ctx.createBufferSource(); src.buffer = buf; src.connect(ctx.destination);
+      src.onended = () => { if (curSrc === src) curSrc = null; if (my === ttsToken && playing) { idx++; speakCurrent(); } };
+      curSrc = src; startedAt = performance.now(); src.start();
+      const next = sentences[idx + 1]; if (next) piperAudio(next.text).catch(() => {});   // prefetch
+      renderPiperState();
+    })
+    .catch((e) => {
+      if (my !== ttsToken) return;
+      setPlaying(false);
+      status(`Голос Piper не заработал: ${e?.message || e}. При первом запуске нужен интернет; можно выбрать другой голос в ⚙ Настройках.`);
+    });
+}
+async function renderPiperState() {
+  if (!piperOk) { $("piperBox").hidden = true; return; }
+  let have = [];
+  try { const keys = (await (await caches.open("piper-voices")).keys()).map(r => r.url); have = Object.keys(PIPER.VOICES).filter(id => keys.includes(modelUrl(id))); } catch {}
+  for (const o of $("voice").options) if (o.value.startsWith("piper:")) o.textContent = `Piper: ${PIPER.VOICES[o.value.slice(6)]}` + (have.includes(o.value.slice(6)) ? " ✓ скачан" : "");
+  $("piperState").textContent = have.length ? `Скачано голосов: ${have.length}.` : "Голоса ещё не скачаны.";
+  $("piperDownload").hidden = !isPiper() || have.includes(piperVoice());
+}
+
 function loadVoices() {
   if (T) {
     const saved = LS.get("cvoice");
@@ -956,13 +1101,32 @@ function loadVoices() {
   }
   const voices = (window.speechSynthesis?.getVoices() || []).filter(v => v.lang.toLowerCase().startsWith("ru"));
   const saved = LS.get("voice");
-  $("voice").innerHTML = voices.map(v => `<option value="${v.name}">${v.name} (${v.lang})</option>`).join("")
-    || `<option value="">Нет русских голосов в системе</option>`;
-  if (saved && voices.some(v => v.name === saved)) $("voice").value = saved;
+  const esc = (t) => t.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+  const piperOpts = piperOk ? `<optgroup label="Piper — нейросеть, без интернета">` + Object.entries(PIPER.VOICES).map(([id, n]) => `<option value="piper:${id}">Piper: ${n}</option>`).join("") + `</optgroup>` : "";
+  const sysOpts = voices.length ? `<optgroup label="Системные голоса">` + voices.map(v => `<option value="${esc(v.name)}">${esc(v.name)} (${v.lang})</option>`).join("") + `</optgroup>` : "";
+  $("voice").innerHTML = piperOpts + sysOpts || `<option value="">Нет русских голосов в системе</option>`;
+  const all = [...$("voice").options].map(o => o.value);
+  $("voice").value = saved && all.includes(saved) ? saved : (piperOk ? "piper:ru_RU-irina-medium" : all[0] || "");
+  renderPiperState();
 }
+$("piperDownload").onclick = async () => {
+  if (!isPiper()) return;
+  $("piperDownload").disabled = true;
+  try {
+    await piperLoad(piperVoice(), (f) => { $("piperState").textContent = `Скачиваю: ${Math.round(f * 100)}%`; });
+    $("piperState").textContent = "Голос скачан и готов ✓";
+  } catch (e) { $("piperState").textContent = "Не удалось скачать: " + (e?.message || e); }
+  finally { $("piperDownload").disabled = false; renderPiperState(); }
+};
+$("piperClear").onclick = async () => {
+  try { await caches.delete("piper-voices"); } catch {}
+  Object.assign(piper, { voice: "", session: null, cfg: null }); piperCache.clear();
+  renderPiperState(); $("piperState").textContent = "Скачанные голоса удалены.";
+};
 if (window.speechSynthesis) speechSynthesis.onvoiceschanged = loadVoices;
 loadVoices();
-$("voice").onchange = () => LS.set(T ? "cvoice" : "voice", $("voice").value);
+$("voice").onchange = () => { LS.set(T ? "cvoice" : "voice", $("voice").value); piperCache.clear(); renderPiperState(); };
+$("rate").addEventListener("change", () => piperCache.clear());
 
 // ---------- TTS ----------
 let playing = false, startedAt = 0, utter = null, ttsToken = 0;
@@ -970,6 +1134,7 @@ function speakCurrent() {
   if (!playing) return;
   if (idx >= sentences.length) { setPlaying(false); status("Конец текста."); return; }
   highlight();
+  if (isPiper()) { piperSpeak(); return; }
   if (T) {                                   // claude.ai platform voice
     const my = ++ttsToken;
     startedAt = performance.now();
@@ -1003,8 +1168,17 @@ function setPlaying(v) {
   $("play").textContent = v ? "⏸" : "▶";
   $("play").setAttribute("aria-label", v ? "Пауза" : "Читать");
 }
-function play() { if (playing || !sentences.length) return; setPlaying(true); speakCurrent(); }
-function stop() { setPlaying(false); utter = null; ttsToken++; try { T?.stop(); } catch {} window.speechSynthesis?.cancel(); }
+function play() {
+  if (playing || !sentences.length) return;
+  if (isPiper()) getCtx().resume?.();          // unlock audio while we're inside the tap
+  setPlaying(true); speakCurrent();
+}
+function stop() {
+  setPlaying(false); utter = null; ttsToken++;
+  try { T?.stop(); } catch {}
+  window.speechSynthesis?.cancel();
+  if (curSrc) { curSrc.onended = null; try { curSrc.stop(); } catch {} curSrc = null; }
+}
 $("play").onclick = () => { if (playing) { stop(); status("Пауза."); } else play(); };
 $("prevBtn").onclick = () => { const was = playing; stop(); idx = Math.max(0, idx - 1); highlight(); if (was) play(); };
 $("nextBtn").onclick = () => { const was = playing; stop(); idx = Math.min(sentences.length - 1, idx + 1); highlight(); if (was) play(); };
