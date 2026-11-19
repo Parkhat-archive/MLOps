@@ -1045,37 +1045,60 @@ async function piperSynth(text, rate, onProgress) {
   return { data: out.output.data, sampleRate: cfg.audio.sample_rate };
 }
 // small cache of synthesized sentences (current + prefetched next)
+// A synthesized sentence becomes a small WAV file played by an <audio> element: unlike Web Audio,
+// an audio element keeps playing with the screen off and gets lock-screen / headset controls.
+function wavBlob(data, sampleRate) {
+  const n = data.length, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
+  const str = (o, t) => { for (let i = 0; i < t.length; i++) v.setUint8(o + i, t.charCodeAt(i)); };
+  str(0, "RIFF"); v.setUint32(4, 36 + n * 2, true); str(8, "WAVE"); str(12, "fmt ");
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, sampleRate, true);
+  v.setUint32(28, sampleRate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); str(36, "data"); v.setUint32(40, n * 2, true);
+  for (let i = 0, o = 44; i < n; i++, o += 2) { const x = Math.max(-1, Math.min(1, data[i])); v.setInt16(o, x < 0 ? x * 32768 : x * 32767, true); }
+  return new Blob([buf], { type: "audio/wav" });
+}
 const piperCache = new Map();
 function piperAudio(text, onProgress) {
   const rate = Math.min(2, Math.max(0.5, +$("rate").value));
   const key = `${piperVoice()}|${rate}|${text}`;
   if (!piperCache.has(key)) {
-    const pr = piperSynth(text, rate, onProgress);
+    const pr = piperSynth(text, rate, onProgress).then(({ data, sampleRate }) => wavBlob(data, sampleRate));
     pr.catch(() => piperCache.delete(key));
     piperCache.set(key, pr);
-    while (piperCache.size > 6) piperCache.delete(piperCache.keys().next().value);
+    while (piperCache.size > 8) piperCache.delete(piperCache.keys().next().value);
   }
   return piperCache.get(key);
 }
-let audioCtx = null, curSrc = null;
-const getCtx = () => audioCtx ||= new (window.AudioContext || window.webkitAudioContext)();
+const player = new Audio();
+player.preload = "auto";
+let playerUrl = "";
+// a short silent clip, played inside the user's tap so later (async) plays are allowed
+const SILENCE = URL.createObjectURL(wavBlob(new Float32Array(2205), 22050));
+function unlockPlayer() {
+  if (player.src && !player.paused) return;
+  player.src = SILENCE; player.play().catch(() => {});
+}
 function piperSpeak() {
   const my = ++ttsToken;
   const text = sentences[idx].text;
   const firstLoad = !(piper.session && piper.voice === piperVoice());
   if (firstLoad) status("Загружаю голос Piper…");
   piperAudio(text, (f) => { if (my === ttsToken) status(`Скачиваю голос Piper: ${Math.round(f * 100)}% — один раз, дальше работает без интернета.`); })
-    .then(({ data, sampleRate }) => {
+    .then((blob) => {
       if (my !== ttsToken || !playing) return;
       if (firstLoad) status("");
-      const ctx = getCtx(); ctx.resume?.();
-      const buf = ctx.createBuffer(1, data.length, sampleRate);
-      buf.copyToChannel(data instanceof Float32Array ? data : Float32Array.from(data), 0);
-      const src = ctx.createBufferSource(); src.buffer = buf; src.connect(ctx.destination);
-      src.onended = () => { if (curSrc === src) curSrc = null; if (my === ttsToken && playing) { idx++; speakCurrent(); } };
-      curSrc = src; startedAt = performance.now(); src.start();
-      const next = sentences[idx + 1]; if (next) piperAudio(next.text).catch(() => {});   // prefetch
-      renderPiperState();
+      if (playerUrl) URL.revokeObjectURL(playerUrl);
+      playerUrl = URL.createObjectURL(blob);
+      player.onended = () => { if (my === ttsToken && playing) { idx++; speakCurrent(); } };
+      player.src = playerUrl;
+      startedAt = performance.now();
+      player.play().catch((e) => {
+        if (my !== ttsToken) return;
+        setPlaying(false); status("Телефон не дал начать звук: нажмите ▶ ещё раз.");
+      });
+      updateMediaSession();
+      // synthesize a few sentences ahead, so reading goes on smoothly even when the phone slows the page down
+      for (let k = 1; k <= 3; k++) { const nx = sentences[idx + k]; if (nx) piperAudio(nx.text).catch(() => {}); }
+      if (firstLoad) renderPiperState();
     })
     .catch((e) => {
       if (my !== ttsToken) return;
@@ -1167,17 +1190,36 @@ function setPlaying(v) {
   playing = v;
   $("play").textContent = v ? "⏸" : "▶";
   $("play").setAttribute("aria-label", v ? "Пауза" : "Читать");
+  if ("mediaSession" in navigator) navigator.mediaSession.playbackState = v ? "playing" : "paused";
 }
 function play() {
   if (playing || !sentences.length) return;
-  if (isPiper()) getCtx().resume?.();          // unlock audio while we're inside the tap
+  if (isPiper()) unlockPlayer();               // allow sound while we're inside the tap
   setPlaying(true); speakCurrent();
 }
 function stop() {
   setPlaying(false); utter = null; ttsToken++;
   try { T?.stop(); } catch {}
   window.speechSynthesis?.cancel();
-  if (curSrc) { curSrc.onended = null; try { curSrc.stop(); } catch {} curSrc = null; }
+  player.onended = null; player.pause();
+}
+
+// ---------- lock screen, notification and headset buttons ----------
+function updateMediaSession() {
+  if (!("mediaSession" in navigator) || !window.MediaMetadata) return;
+  navigator.mediaSession.metadata = new MediaMetadata({
+    title: sentences[idx]?.text.slice(0, 90) || meta.name,
+    artist: meta.name,
+    album: "Голосовой чтец",
+  });
+}
+if ("mediaSession" in navigator) {
+  const ms = navigator.mediaSession, set = (a, f) => { try { ms.setActionHandler(a, f); } catch {} };
+  set("play", () => play());
+  set("pause", () => { stop(); status("Пауза."); });
+  set("stop", () => { stop(); status("Пауза."); });
+  set("nexttrack", () => $("nextBtn").click());
+  set("previoustrack", () => $("prevBtn").click());
 }
 $("play").onclick = () => { if (playing) { stop(); status("Пауза."); } else play(); };
 $("prevBtn").onclick = () => { const was = playing; stop(); idx = Math.max(0, idx - 1); highlight(); if (was) play(); };
