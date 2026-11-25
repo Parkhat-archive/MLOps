@@ -235,6 +235,7 @@
           <button id="piperClear" class="ghost">Удалить скачанные</button>
         </div>
         <small id="piperState"></small>
+        <div class="row"><small id="audioState" class="grow"></small><button id="audioClear" class="ghost">Удалить записи</button></div>
       </div>
       <small>Системные голоса лучше: Android → Настройки → Синтез речи → Google → Установка голосовых данных → Русский.</small>
     </section>
@@ -273,6 +274,8 @@
   <div id="moreMenu" class="menu" hidden>
     <button id="notesBtn">📋 Заметки и флажки</button>
     <button id="versionsBtn">🕘 Версии</button>
+    <button id="voiceAllBtn">🎧 Озвучить весь текст</button>
+    <button id="wavBtn">⬇ Скачать аудио (WAV)</button>
     <button id="typeBtn">⌨ Писать текстом</button>
     <button id="download">⬇ Скачать файл</button>
     <button id="helpBtn">❔ Как пользоваться</button>
@@ -303,6 +306,12 @@
   </div>
   <div id="notesPanel" class="card panel" hidden></div>
   <div id="versionsPanel" class="card panel" hidden></div>
+  <div id="genCard" class="card panel" hidden>
+    <div class="card-head"><h2>🎧 Озвучиваю текст</h2></div>
+    <progress id="genBar" max="1" value="0" style="width:100%"></progress>
+    <small id="genInfo"></small>
+    <div><button id="genStop">Остановить</button></div>
+  </div>
   <div id="status" role="status"></div>
   <article id="reader"></article>
   <div class="dock">
@@ -489,12 +498,13 @@ function serialize() {
 // =====================================================================
 const idb = new Promise((ok, fail) => {
   if (!window.indexedDB) { fail(new Error("браузер не даёт локальное хранилище")); return; }
-  const r = indexedDB.open("voice-reader", 2);
+  const r = indexedDB.open("voice-reader", 3);
   r.onupgradeneeded = () => {
     const d = r.result;
     if (!d.objectStoreNames.contains("docs")) d.createObjectStore("docs", { keyPath: "id" });
     if (!d.objectStoreNames.contains("versions")) d.createObjectStore("versions", { keyPath: "vid", autoIncrement: true }).createIndex("docId", "docId");
     if (!d.objectStoreNames.contains("projects")) d.createObjectStore("projects", { keyPath: "id" });
+    if (!d.objectStoreNames.contains("audio")) d.createObjectStore("audio", { keyPath: "key" }).createIndex("at", "at");
   };
   r.onsuccess = () => ok(r.result);
   r.onerror = () => fail(r.error);
@@ -599,12 +609,12 @@ const fmtDate = (t) => new Date(t).toLocaleString("ru-RU", { day: "numeric", mon
 const words = (t) => (t.match(/[\p{L}\p{N}]+/gu) || []).length;
 function downloadText(name, data) {
   if (DL) return DL.save({ filename: name, data }).catch(() => status("Файл не сохранён."));
-  const url = URL.createObjectURL(new Blob([data], { type: /\.json$/.test(name) ? "application/json" : "text/plain" }));
+  const url = URL.createObjectURL(data instanceof Blob ? data : new Blob([data], { type: /\.json$/.test(name) ? "application/json" : "text/plain" }));
   const a = document.createElement("a");
   a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
-const baseName = () => meta.name.replace(/\.[^.]+$/, "");
+const baseName = () => meta.name.replace(/\.(md|markdown|txt|docx)$/i, "").replace(/[\\/:*?"<>|]/g, "-").replace(/[.\s]+$/, "").slice(0, 80) || "text";
 const ext = () => meta.isMd ? ".md" : ".txt";
 async function renderVersions() {
   const panel = $("versionsPanel");
@@ -1056,12 +1066,41 @@ function wavBlob(data, sampleRate) {
   for (let i = 0, o = 44; i < n; i++, o += 2) { const x = Math.max(-1, Math.min(1, data[i])); v.setInt16(o, x < 0 ? x * 32768 : x * 32767, true); }
   return new Blob([buf], { type: "audio/wav" });
 }
+// ---------- recorded audio: every synthesized sentence is kept on the phone ----------
+// Keyed by voice + exact sentence text, so an edited sentence simply has no recording yet and
+// gets voiced again; everything else plays from the recording (also with the screen off).
+const AUDIO_CAP = 400 * 1024 * 1024;
+const audioKey = (text) => `${piperVoice()}|${text}`;
+const audioGet = (key) => dbGet("audio", key).then(r => r?.blob || null).catch(() => null);
+let trimTimer = null;
+function audioPut(key, blob) {
+  dbPut("audio", { key, blob, size: blob.size, at: Date.now() }).catch(() => {});
+  clearTimeout(trimTimer); trimTimer = setTimeout(trimAudio, 3000);
+}
+async function audioUsage() {
+  let total = 0, n = 0;
+  await dbReq("audio", "readonly", st => { const c = st.openCursor(); c.onsuccess = () => { const cur = c.result; if (cur) { total += cur.value.size || 0; n++; cur.continue(); } }; return c; });
+  return { total, n };
+}
+async function trimAudio() {                    // keep the store under AUDIO_CAP, dropping the oldest recordings
+  try {
+    let { total } = await audioUsage();
+    if (total <= AUDIO_CAP) return;
+    await dbReq("audio", "readwrite", st => { const c = st.index("at").openCursor(); c.onsuccess = () => { const cur = c.result; if (cur && total > AUDIO_CAP * 0.9) { total -= cur.value.size || 0; cur.delete(); cur.continue(); } }; return c; });
+  } catch {}
+}
 const piperCache = new Map();
 function piperAudio(text, onProgress) {
-  const rate = Math.min(2, Math.max(0.5, +$("rate").value));
-  const key = `${piperVoice()}|${rate}|${text}`;
+  const key = audioKey(text);
   if (!piperCache.has(key)) {
-    const pr = piperSynth(text, rate, onProgress).then(({ data, sampleRate }) => wavBlob(data, sampleRate));
+    const pr = (async () => {
+      const stored = await audioGet(key);
+      if (stored) return stored;
+      const { data, sampleRate } = await piperSynth(text, 1, onProgress);
+      const blob = wavBlob(data, sampleRate);
+      audioPut(key, blob);
+      return blob;
+    })();
     pr.catch(() => piperCache.delete(key));
     piperCache.set(key, pr);
     while (piperCache.size > 8) piperCache.delete(piperCache.keys().next().value);
@@ -1090,6 +1129,8 @@ function piperSpeak() {
       playerUrl = URL.createObjectURL(blob);
       player.onended = () => { if (my === ttsToken && playing) { idx++; speakCurrent(); } };
       player.src = playerUrl;
+      player.defaultPlaybackRate = player.playbackRate = Math.min(2, Math.max(0.5, +$("rate").value));
+      player.preservesPitch = true;
       startedAt = performance.now();
       player.play().catch((e) => {
         if (my !== ttsToken) return;
@@ -1141,15 +1182,85 @@ $("piperDownload").onclick = async () => {
   } catch (e) { $("piperState").textContent = "Не удалось скачать: " + (e?.message || e); }
   finally { $("piperDownload").disabled = false; renderPiperState(); }
 };
+let genToken = 0, wakeLock = null;
+async function missingAudio() {
+  const out = [];
+  for (let i = 0; i < sentences.length; i++) if (!(await audioGet(audioKey(sentences[i].text)))) out.push(i);
+  return out;
+}
+async function voiceAll(thenDownload = false) {
+  if (!isPiper()) { status("Озвучка заранее работает с голосами Piper: выберите голос Piper в ⚙ Настройках."); return false; }
+  if (!sentences.length) return false;
+  stop();
+  const my = ++genToken;
+  const todo = await missingAudio();
+  if (!todo.length) { status("Весь текст уже озвучен — можно читать с выключенным экраном."); return true; }
+  $("genCard").hidden = false;
+  try { wakeLock = await navigator.wakeLock?.request("screen"); } catch {}    // keep the screen on while voicing
+  const t0 = performance.now(), total = todo.length;
+  let done = 0, ok = true;
+  for (const i of todo) {
+    if (my !== genToken) { ok = false; break; }
+    try { await piperAudio(sentences[i].text, (f) => { $("genInfo").textContent = `Скачиваю голос: ${Math.round(f * 100)}%`; }); }
+    catch (e) { status("Не удалось озвучить: " + (e?.message || e)); ok = false; break; }
+    done++;
+    const per = (performance.now() - t0) / done, left = Math.round(per * (total - done) / 60000);
+    $("genBar").value = done / total;
+    $("genInfo").textContent = `Озвучено ${done} из ${total}` + (total - done ? ` · осталось ≈ ${left < 1 ? "меньше минуты" : left + " мин"}` : "") + ". Экран не гаснет, пока идёт озвучка.";
+  }
+  try { await wakeLock?.release(); } catch {} wakeLock = null;
+  $("genCard").hidden = true;
+  if (ok) status(`Готово: весь текст озвучен (${sentences.length} предложений). Теперь можно читать с выключенным экраном.` + (thenDownload ? "" : ""));
+  else if (my !== genToken) status(`Озвучка остановлена: готово ${done} из ${total}. Продолжить можно в меню ⋯.`);
+  renderAudioState();
+  return ok;
+}
+$("genStop").onclick = () => { genToken++; };
+$("voiceAllBtn").onclick = () => voiceAll();
+$("wavBtn").onclick = async () => {
+  if (!(await voiceAll(true))) return;
+  status("Собираю аудиофайл…");
+  const parts = [], gap = new Uint8Array(Math.round(22050 * 0.35) * 2);
+  let sampleRate = 22050;
+  for (const s of sentences) {
+    const b = await audioGet(audioKey(s.text)); if (!b) continue;
+    const buf = await b.arrayBuffer(); sampleRate = new DataView(buf).getUint32(24, true);
+    parts.push(new Uint8Array(buf, 44), gap);
+  }
+  const len = parts.reduce((a, p) => a + p.length, 0);
+  const head = new DataView(new ArrayBuffer(44));
+  const str = (o, t) => { for (let i = 0; i < t.length; i++) head.setUint8(o + i, t.charCodeAt(i)); };
+  str(0, "RIFF"); head.setUint32(4, 36 + len, true); str(8, "WAVE"); str(12, "fmt "); head.setUint32(16, 16, true); head.setUint16(20, 1, true); head.setUint16(22, 1, true);
+  head.setUint32(24, sampleRate, true); head.setUint32(28, sampleRate * 2, true); head.setUint16(32, 2, true); head.setUint16(34, 16, true); str(36, "data"); head.setUint32(40, len, true);
+  const blob = new Blob([head.buffer, ...parts], { type: "audio/wav" });
+  downloadText(baseName() + ".wav", blob);
+  const mins = Math.round(len / 2 / sampleRate / 60);
+  status(`Аудиофайл готов: ${(blob.size / 1048576).toFixed(1)} МБ, ${mins ? "≈ " + mins + " мин" : "меньше минуты"}. Его можно слушать в любом плеере.`);
+};
+async function renderAudioState() {
+  try { const { total, n } = await audioUsage(); $("audioState").textContent = n ? `Записанных предложений: ${n} · ${(total / 1048576).toFixed(1)} МБ на телефоне.` : "Записанных предложений пока нет."; } catch {}
+}
+$("audioClear").onclick = async () => {
+  await dbReq("audio", "readwrite", st => st.clear()).catch(() => {});
+  piperCache.clear(); renderAudioState(); $("audioState").textContent = "Записи удалены.";
+};
+// show how much of the open text is already voiced, in the ⋯ menu
+$("moreBtn").addEventListener("click", async () => {
+  if (!isPiper() || !sentences.length) { $("voiceAllBtn").textContent = "🎧 Озвучить весь текст"; return; }
+  const miss = (await missingAudio()).length;
+  $("voiceAllBtn").textContent = miss ? `🎧 Озвучить весь текст (готово ${Math.round(100 * (sentences.length - miss) / sentences.length)}%)` : "🎧 Весь текст озвучен ✓";
+});
+
 $("piperClear").onclick = async () => {
   try { await caches.delete("piper-voices"); } catch {}
   Object.assign(piper, { voice: "", session: null, cfg: null }); piperCache.clear();
   renderPiperState(); $("piperState").textContent = "Скачанные голоса удалены.";
 };
+renderAudioState();
 if (window.speechSynthesis) speechSynthesis.onvoiceschanged = loadVoices;
 loadVoices();
 $("voice").onchange = () => { LS.set(T ? "cvoice" : "voice", $("voice").value); piperCache.clear(); renderPiperState(); };
-$("rate").addEventListener("change", () => piperCache.clear());
+$("rate").addEventListener("input", () => { if (!player.paused) player.playbackRate = +$("rate").value; });
 
 // ---------- TTS ----------
 let playing = false, startedAt = 0, utter = null, ttsToken = 0;
@@ -1235,7 +1346,7 @@ function targetIndex() {
 $("load").onclick = () => {
   const t = $("input").value;
   if (!t.trim()) { projMsg("Вставьте текст."); return; }
-  const firstLine = t.trim().split("\n")[0].replace(/^#+\s*/, "").slice(0, 40);
+  const firstLine = t.trim().split("\n")[0].replace(/^#+\s*/, "").slice(0, 40).replace(/[\s.,;:—-]+$/, "");
   const name = $("pasteName").value.trim() || firstLine || "Вставленный текст";
   $("pasteBox").hidden = true; $("input").value = ""; $("pasteName").value = "";
   openDoc(t, { source: "local", name, isMd: /^\s{0,3}(#{1,6}\s|[-*+]\s|>\s)/m.test(t), project: curProject }, false);
@@ -1324,7 +1435,7 @@ document.addEventListener("click", (e) => {
   if (!$("projMenu").hidden && !e.target.closest("#projMenu") && !e.target.closest("#projMoreBtn")) $("projMenu").hidden = true;
 });
 $("moreBtn").onclick = () => { $("moreMenu").hidden = !$("moreMenu").hidden; };
-for (const id of ["notesBtn", "versionsBtn", "typeBtn", "download", "helpBtn", "settingsBtn2"]) $(id).addEventListener("click", () => { $("moreMenu").hidden = true; });
+for (const id of ["notesBtn", "versionsBtn", "voiceAllBtn", "wavBtn", "typeBtn", "download", "helpBtn", "settingsBtn2"]) $(id).addEventListener("click", () => { $("moreMenu").hidden = true; });
 $("typeBtn").onclick = () => openEditor("edit");
 $("helpBtn").onclick = () => { $("helpPanel").hidden = !$("helpPanel").hidden; };
 $("settingsBtn").onclick = () => go("settings");
