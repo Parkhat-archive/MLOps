@@ -1305,15 +1305,110 @@ function setPlaying(v) {
 }
 function play() {
   if (playing || !sentences.length) return;
-  if (isPiper()) unlockPlayer();               // allow sound while we're inside the tap
+  if (isPiper()) {
+    if (player.paused && !(track && player.src === track.url)) unlockPlayer();   // allow sound while we're inside the tap
+    setPlaying(true); startPiper(); return;
+  }
+  if (!T && !LS.get("bgHint")) { LS.set("bgHint", "1"); setTimeout(() => status("Совет: чтобы чтение продолжалось при смене приложения и выключенном экране, выберите голос Piper в ⚙ Настройках."), 50); }
   setPlaying(true); speakCurrent();
 }
 function stop() {
   setPlaying(false); utter = null; ttsToken++;
   try { T?.stop(); } catch {}
   window.speechSynthesis?.cancel();
-  player.onended = null; player.pause();
+  player.onended = null; player.ontimeupdate = null; player.pause();
 }
+
+// =====================================================================
+// Continuous track: when every sentence has a recording, the whole text is played as ONE audio
+// file (recordings joined without copying). To the phone it's an ordinary long audio, like a
+// podcast, so it keeps playing when you switch apps or turn the screen off. The highlighted
+// sentence follows the playback time. After an edit the track is rebuilt instantly.
+// =====================================================================
+const GAP = 0.3;                                  // seconds of silence between sentences
+let track = null;
+const trackKey = () => piperVoice() + "|" + sentences.map(s => s.text).join("\u0001");
+async function buildTrack() {
+  const key = trackKey();
+  if (track?.key === key) return track;
+  const parts = [], offsets = [];
+  let t = 0, sr = 0, gap = null, bytes = 0;
+  for (const s of sentences) {
+    const blob = await audioGet(audioKey(s.text));
+    if (!blob) return null;
+    if (!sr) {
+      sr = new DataView(await blob.slice(24, 28).arrayBuffer()).getUint32(0, true);
+      gap = new Blob([new Uint8Array(Math.round(sr * GAP) * 2)]);
+    }
+    offsets.push(t);
+    parts.push(blob.slice(44), gap);
+    bytes += blob.size - 44 + gap.size;
+    t += (blob.size - 44) / 2 / sr + GAP;
+  }
+  const h = new DataView(new ArrayBuffer(44));
+  const str = (o, x) => { for (let i = 0; i < x.length; i++) h.setUint8(o + i, x.charCodeAt(i)); };
+  str(0, "RIFF"); h.setUint32(4, 36 + bytes, true); str(8, "WAVE"); str(12, "fmt "); h.setUint32(16, 16, true); h.setUint16(20, 1, true); h.setUint16(22, 1, true);
+  h.setUint32(24, sr, true); h.setUint32(28, sr * 2, true); h.setUint16(32, 2, true); h.setUint16(34, 16, true); str(36, "data"); h.setUint32(40, bytes, true);
+  if (track) URL.revokeObjectURL(track.url);
+  track = { key, url: URL.createObjectURL(new Blob([h.buffer, ...parts], { type: "audio/wav" })), offsets, dur: t };
+  return track;
+}
+function indexAt(time) {                          // sentence playing at `time` (binary search)
+  const o = track.offsets; let lo = 0, hi = o.length - 1;
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (o[mid] <= time + 0.05) lo = mid; else hi = mid - 1; }
+  return lo;
+}
+let lastPos = 0;
+async function startPiper() {
+  const my = ++ttsToken;
+  try {
+    let miss = await missingAudio();
+    if (miss.length && miss.length <= 8) {          // a few new/edited sentences: voice them first
+      status(miss.length === 1 ? "Озвучиваю изменённое предложение…" : `Озвучиваю изменённые предложения (${miss.length})…`);
+      for (const i of miss) {
+        await piperAudio(sentences[i].text, (f) => { if (my === ttsToken) status(`Скачиваю голос Piper: ${Math.round(f * 100)}% — один раз.`); });
+        if (my !== ttsToken || !playing) return;
+      }
+      miss = [];
+    }
+    if (miss.length) {                               // not voiced yet: sentence by sentence (needs the screen on)
+      if (!LS.get("trackHint")) { LS.set("trackHint", "1"); setTimeout(() => status("Совет: нажмите ⋯ → 🎧 «Озвучить весь текст» — тогда чтение не прервётся при смене приложения."), 1500); }
+      speakCurrent(); return;
+    }
+    const tr = await buildTrack();
+    if (my !== ttsToken || !playing || !tr) { if (!tr && playing) speakCurrent(); return; }
+    if (player.src !== tr.url) {
+      player.src = tr.url;
+      await new Promise((ok) => { player.addEventListener("loadedmetadata", ok, { once: true }); player.load(); });
+      if (my !== ttsToken || !playing) return;
+    }
+    player.currentTime = tr.offsets[idx] || 0;
+    player.defaultPlaybackRate = player.playbackRate = Math.min(2, Math.max(0.5, +$("rate").value));
+    player.preservesPitch = true;
+    player.onended = () => { if (my !== ttsToken) return; setPlaying(false); idx = sentences.length - 1; highlight(); status("Конец текста."); };
+    player.ontimeupdate = () => {
+      if (my !== ttsToken) return;
+      const i = indexAt(player.currentTime);
+      if (i !== idx) {
+        idx = i; startedAt = performance.now();
+        if (document.hidden) LS.set("pos:" + meta.id, String(idx)); else highlight();
+        updateMediaSession();
+      }
+      if ("mediaSession" in navigator && navigator.mediaSession.setPositionState && Math.abs(player.currentTime - lastPos) > 1) {
+        lastPos = player.currentTime;
+        try { navigator.mediaSession.setPositionState({ duration: tr.dur, playbackRate: player.playbackRate, position: Math.min(player.currentTime, tr.dur) }); } catch {}
+      }
+    };
+    startedAt = performance.now();
+    updateMediaSession();
+    await player.play();
+  } catch (e) {
+    if (my !== ttsToken) return;
+    setPlaying(false);
+    status(`Не удалось начать чтение: ${e?.message || e}. Нажмите ▶ ещё раз.`);
+  }
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden && !$("readerView").hidden) highlight(); });
 
 // ---------- lock screen, notification and headset buttons ----------
 function updateMediaSession() {
@@ -1331,6 +1426,9 @@ if ("mediaSession" in navigator) {
   set("stop", () => { stop(); status("Пауза."); });
   set("nexttrack", () => $("nextBtn").click());
   set("previoustrack", () => $("prevBtn").click());
+  set("seekto", (d) => { if (track && player.src === track.url && d.seekTime != null) player.currentTime = d.seekTime; });
+  set("seekbackward", () => $("prevBtn").click());
+  set("seekforward", () => $("nextBtn").click());
 }
 $("play").onclick = () => { if (playing) { stop(); status("Пауза."); } else play(); };
 $("prevBtn").onclick = () => { const was = playing; stop(); idx = Math.max(0, idx - 1); highlight(); if (was) play(); };
