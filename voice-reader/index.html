@@ -123,6 +123,10 @@
     <div class="title"><div class="app">📖 Голосовой чтец</div></div>
     <button id="settingsBtn" class="icon" aria-label="Настройки" title="Настройки">⚙</button>
   </header>
+  <div id="webviewWarn" class="card" hidden style="margin-bottom:14px;border-color:var(--warn)">
+    <b>⚠ Страница открыта внутри другого приложения</b>
+    <small>Во встроенном браузере (Telegram, мессенджеры, приложение Claude) звук останавливается при блокировке телефона. Откройте сайт в Chrome: меню ⋮ → «Открыть в Chrome» / «Открыть в браузере».</small>
+  </div>
   <small id="libMsg" role="status"></small>
   <div class="cards">
     <section id="continueCard" class="card hero" hidden>
@@ -259,6 +263,12 @@
       <small id="keyHelp"></small>
       <label id="wakeRow" class="row"><input type="checkbox" id="wake" style="width:auto;min-height:0"> Голосовые команды «стоп», «дальше», «правка», «добавь» (экспериментально)</label>
     </section>
+    <section class="card">
+      <h2>Журнал воспроизведения</h2>
+      <small>Если чтение останавливается при блокировке или смене приложения: воспроизведите остановку, вернитесь сюда, нажмите «Скопировать» и пришлите текст разработчику.</small>
+      <pre id="plogBox" style="white-space:pre-wrap;font-size:12px;max-height:240px;overflow:auto;background:var(--surface2);padding:10px;border-radius:10px;margin:0"></pre>
+      <div class="row"><button id="plogCopy">📋 Скопировать журнал</button><button id="plogClear" class="ghost">Очистить</button></div>
+    </section>
     <details><summary>Диагностика</summary><small id="diag">…</small></details>
   </div>
 </div>
@@ -312,6 +322,7 @@
     <small id="genInfo"></small>
     <div><button id="genStop">Остановить</button></div>
   </div>
+  <div id="bgMode" class="muted" style="font-size:13px;margin-bottom:6px"></div>
   <div id="status" role="status"></div>
   <article id="reader"></article>
   <div class="dock">
@@ -647,6 +658,16 @@ async function restoreVersion(v) {
   openDoc(v.text, { ...meta, dirty: true }, true,
     `Открыта версия от ${fmtDate(v.at)}. Нажмите «${meta.source === "github" ? "☁ Сохранить" : "💾 Сохранить"}», чтобы закрепить её.`);
 }
+$("plogCopy").onclick = async () => {
+  const text = `UA: ${navigator.userAgent}\nwebview: ${isWebView}\n` + plogItems.join("\n");
+  try { await navigator.clipboard.writeText(text); $("plogCopy").textContent = "Скопировано ✓"; }
+  catch { const r = document.createRange(); r.selectNodeContents($("plogBox")); getSelection().removeAllRanges(); getSelection().addRange(r); $("plogCopy").textContent = "Выделено — скопируйте"; }
+  setTimeout(() => { $("plogCopy").textContent = "📋 Скопировать журнал"; }, 2500);
+};
+$("plogClear").onclick = () => { plogItems = []; LS.set("plog", "[]"); $("plogBox").textContent = ""; };
+$("settingsBtn").addEventListener("click", () => { $("plogBox").textContent = plogItems.slice().reverse().join("\n") || "Пока пусто."; });
+$("settingsBtn2").addEventListener("click", () => { $("plogBox").textContent = plogItems.slice().reverse().join("\n") || "Пока пусто."; });
+
 $("versionsBtn").onclick = () => {
   const p = $("versionsPanel"); p.hidden = !p.hidden;
   if (!p.hidden) { $("notesPanel").hidden = true; renderVersions(); }
@@ -1107,7 +1128,39 @@ function piperAudio(text, onProgress) {
   }
   return piperCache.get(key);
 }
+// ---------- playback log (for finding out why reading stops in the background) ----------
+let plogItems = [];
+try { plogItems = JSON.parse(localStorage.getItem("plog") || "[]"); } catch {}
+function plog(msg) {
+  const t = new Date().toLocaleTimeString("ru-RU");
+  plogItems.push(`${t} ${msg}`);
+  if (plogItems.length > 150) plogItems = plogItems.slice(-150);
+  LS.set("plog", JSON.stringify(plogItems));
+  const box = document.getElementById("plogBox"); if (box && !document.hidden) box.textContent = plogItems.slice().reverse().join("\n");
+}
+const isWebView = /; wv\)|FBAN|FBAV|Instagram|Telegram|MicroMessenger|Line\//i.test(navigator.userAgent);
+document.addEventListener("visibilitychange", () => plog(document.hidden ? "экран скрыт (блокировка или другое приложение)" : "экран снова виден"));
+window.addEventListener("pagehide", () => plog("страница выгружается (pagehide)"));
+document.addEventListener("freeze", () => plog("браузер заморозил страницу (freeze)"));
+document.addEventListener("resume", () => plog("страница разморожена (resume)"));
 const player = new Audio();
+let ourPause = false;
+for (const ev of ["play", "playing", "waiting", "stalled", "suspend", "error", "ended"]) player.addEventListener(ev, () => {
+  if (ev === "suspend" && !playing) return;
+  plog(`плеер: ${ev}` + (ev === "error" ? ` (${player.error?.code} ${player.error?.message || ""})` : "") + ` · t=${player.currentTime.toFixed(1)}`);
+});
+player.addEventListener("pause", () => {
+  if (ourPause) { ourPause = false; return; }
+  if (!playing || player.ended) return;
+  plog(`⚠ браузер сам поставил на паузу (экран ${document.hidden ? "скрыт" : "виден"}) · t=${player.currentTime.toFixed(1)}`);
+  setTimeout(() => {                             // try to continue
+    if (!playing) return;
+    player.play().then(() => plog("возобновил сам ✓")).catch((e) => {
+      plog(`возобновить не удалось: ${e?.name || e}`);
+      stop(); status("Телефон остановил чтение. Нажмите ▶, чтобы продолжить.");
+    });
+  }, 400);
+});
 player.preload = "auto";
 let playerUrl = "";
 // a short silent clip, played inside the user's tap so later (async) plays are allowed
@@ -1128,6 +1181,7 @@ function piperSpeak() {
       if (playerUrl) URL.revokeObjectURL(playerUrl);
       playerUrl = URL.createObjectURL(blob);
       player.onended = () => { if (my === ttsToken && playing) { idx++; speakCurrent(); } };
+      if (!player.paused) ourPause = true;
       player.src = playerUrl;
       player.defaultPlaybackRate = player.playbackRate = Math.min(2, Math.max(0.5, +$("rate").value));
       player.preservesPitch = true;
@@ -1310,13 +1364,16 @@ function play() {
     setPlaying(true); startPiper(); return;
   }
   if (!T && !LS.get("bgHint")) { LS.set("bgHint", "1"); setTimeout(() => status("Совет: чтобы чтение продолжалось при смене приложения и выключенном экране, выберите голос Piper в ⚙ Настройках."), 50); }
+  plog(`старт: ${T ? "голос Claude" : "системный голос"} — в фоне Android его останавливает`);
+  $("bgMode").textContent = "⚠ Системный голос останавливается при блокировке. Для фона выберите голос Piper в ⚙ Настройках.";
   setPlaying(true); speakCurrent();
 }
 function stop() {
   setPlaying(false); utter = null; ttsToken++;
   try { T?.stop(); } catch {}
   window.speechSynthesis?.cancel();
-  player.onended = null; player.ontimeupdate = null; player.pause();
+  player.onended = null; player.ontimeupdate = null;
+  if (!player.paused) { ourPause = true; player.pause(); }
 }
 
 // =====================================================================
@@ -1373,11 +1430,14 @@ async function startPiper() {
     }
     if (miss.length) {                               // not voiced yet: sentence by sentence (needs the screen on)
       if (!LS.get("trackHint")) { LS.set("trackHint", "1"); setTimeout(() => status("Совет: нажмите ⋯ → 🎧 «Озвучить весь текст» — тогда чтение не прервётся при смене приложения."), 1500); }
+      plog(`старт: по предложениям (не озвучено ${miss.length} из ${sentences.length}) — в фоне может остановиться`);
+      $("bgMode").textContent = `⚠ Озвучено не всё (${sentences.length - miss.length} из ${sentences.length}) — при блокировке чтение может остановиться. ⋯ → 🎧 Озвучить весь текст.`;
       speakCurrent(); return;
     }
     const tr = await buildTrack();
     if (my !== ttsToken || !playing || !tr) { if (!tr && playing) speakCurrent(); return; }
     if (player.src !== tr.url) {
+      if (!player.paused) ourPause = true;
       player.src = tr.url;
       await new Promise((ok) => { player.addEventListener("loadedmetadata", ok, { once: true }); player.load(); });
       if (my !== ttsToken || !playing) return;
@@ -1401,6 +1461,8 @@ async function startPiper() {
     };
     startedAt = performance.now();
     updateMediaSession();
+    plog(`старт: единый трек, голос ${piperVoice()}, предложение ${idx + 1}/${sentences.length}, ${Math.round(tr.dur)} с`);
+    $("bgMode").textContent = "🎧 Весь текст озвучен — можно блокировать телефон и переключать приложения.";
     await player.play();
   } catch (e) {
     if (my !== ttsToken) return;
@@ -2141,6 +2203,7 @@ function wakeStart() {
 function wakeStop() { const w = wake; wake = null; if (w) { w.onend = null; try { w.abort(); } catch {} } }
 
 // ---------- start ----------
+$("webviewWarn").hidden = !isWebView;
 syncCloudUI();
 (async () => {                                   // move the old single saved text into phone storage
   try {
