@@ -113,6 +113,7 @@
   @media (prefers-reduced-motion: reduce) { #actions button.listening { animation: none; } #reader span.s { transition: none; } }
   .player { display:flex; align-items:center; justify-content:center; gap: 14px; }
   .player button { background: transparent; font-size: 22px; min-width: 48px; }
+  .player #awakeBtn[aria-pressed="true"] { background: var(--accent-soft); border-radius: 50%; }
   .player #play { background: var(--accent); color: var(--accent-fg); width: 60px; height: 60px; border-radius: 50%; font-size: 24px; }
   @media (min-width: 700px) { #reader { font-size: 21px; } }
 </style>
@@ -312,6 +313,7 @@
     🎤 <b>Правка</b> — скажите новый вариант («пусть будет …»; «удали» — удалить).<br>
     ➕ <b>Фраза</b> — вставить сказанное после предложения. ¶ <b>Абзац</b> — новым абзацем.<br>
     📝 <b>Заметка</b> — комментарий, текст не меняется. 🚩 <b>Флажок</b> — отметить, чтобы вернуться.<br>
+    🔆 внизу справа — не гасить экран, пока открыт текст.<br>
     Всё сохраняется на телефоне автоматически; «Сохранить» создаёт версию (и отправляет в GitHub для глав оттуда).</small>
   </div>
   <div id="notesPanel" class="card panel" hidden></div>
@@ -340,7 +342,7 @@
         <button id="prevBtn" aria-label="Предыдущее предложение" title="Назад">⏮</button>
         <button id="play" aria-label="Читать" title="Читать / пауза (пробел)">▶</button>
         <button id="nextBtn" aria-label="Следующее предложение" title="Вперёд">⏭</button>
-        <span style="min-width:48px"></span>
+        <button id="awakeBtn" aria-pressed="false" aria-label="Не гасить экран" title="Не гасить экран">🔆</button>
       </div>
     </div>
   </div>
@@ -1365,7 +1367,8 @@ function play() {
   }
   if (!T && !LS.get("bgHint")) { LS.set("bgHint", "1"); setTimeout(() => status("Совет: чтобы чтение продолжалось при смене приложения и выключенном экране, выберите голос Piper в ⚙ Настройках."), 50); }
   plog(`старт: ${T ? "голос Claude" : "системный голос"} — в фоне Android его останавливает`);
-  $("bgMode").textContent = "⚠ Системный голос останавливается при блокировке. Для фона выберите голос Piper в ⚙ Настройках.";
+  $("bgMode").dataset.warn = "1";
+  $("bgMode").textContent = awakeOn ? "🔆 Экран не гаснет — чтение не прервётся." : "⚠ Системный голос останавливается при блокировке. Включите 🔆 «Не гасить экран» внизу или выберите голос Piper в ⚙ Настройках.";
   setPlaying(true); speakCurrent();
 }
 function stop() {
@@ -1431,7 +1434,8 @@ async function startPiper() {
     if (miss.length) {                               // not voiced yet: sentence by sentence (needs the screen on)
       if (!LS.get("trackHint")) { LS.set("trackHint", "1"); setTimeout(() => status("Совет: нажмите ⋯ → 🎧 «Озвучить весь текст» — тогда чтение не прервётся при смене приложения."), 1500); }
       plog(`старт: по предложениям (не озвучено ${miss.length} из ${sentences.length}) — в фоне может остановиться`);
-      $("bgMode").textContent = `⚠ Озвучено не всё (${sentences.length - miss.length} из ${sentences.length}) — при блокировке чтение может остановиться. ⋯ → 🎧 Озвучить весь текст.`;
+      $("bgMode").dataset.warn = "1";
+      $("bgMode").textContent = awakeOn ? "🔆 Экран не гаснет — чтение не прервётся." : `⚠ Озвучено не всё (${sentences.length - miss.length} из ${sentences.length}) — при блокировке чтение может остановиться. Включите 🔆 «Не гасить экран» внизу или ⋯ → 🎧 Озвучить весь текст.`;
       speakCurrent(); return;
     }
     const tr = await buildTrack();
@@ -1462,6 +1466,7 @@ async function startPiper() {
     startedAt = performance.now();
     updateMediaSession();
     plog(`старт: единый трек, голос ${piperVoice()}, предложение ${idx + 1}/${sentences.length}, ${Math.round(tr.dur)} с`);
+    delete $("bgMode").dataset.warn;
     $("bgMode").textContent = "🎧 Весь текст озвучен — можно блокировать телефон и переключать приложения.";
     await player.play();
   } catch (e) {
@@ -1550,6 +1555,7 @@ $("newFileName").addEventListener("keydown", (e) => { if (e.key === "Enter") $("
 const VIEWS = { "": "libraryView", proj: "projectView", read: "readerView", settings: "settingsView" };
 function show(view) {
   for (const [k, id] of Object.entries(VIEWS)) $(id).hidden = k !== view;
+  applyAwake();
   $("moreMenu").hidden = true; $("projMenu").hidden = true;
   window.scrollTo(0, 0);
 }
@@ -1583,6 +1589,42 @@ window.addEventListener("hashchange", () => {
   else if (navStack[navStack.length - 1] !== v) navStack.push(v);
   route();
 });
+// ---------- "don't turn the screen off" while a text is open ----------
+let awakeOn = LS.get("awake") === "1", awakeLock = null;
+const awakeSupported = "wakeLock" in navigator;
+function updateAwakeBtn() {
+  $("awakeBtn").hidden = !awakeSupported;
+  $("awakeBtn").setAttribute("aria-pressed", String(awakeOn));
+  $("awakeBtn").title = awakeOn ? "Экран не гаснет — нажмите, чтобы выключить" : "Не гасить экран";
+}
+async function applyAwake() {
+  const want = awakeOn && !document.hidden && !$("readerView").hidden;
+  if (want && !awakeLock) {
+    try {
+      awakeLock = await navigator.wakeLock.request("screen");
+      awakeLock.addEventListener("release", () => { awakeLock = null; });
+    } catch (e) {
+      awakeOn = false; LS.set("awake", "0");
+      status("Телефон не разрешил держать экран включённым" + (e?.message ? ": " + e.message : "") + ".");
+    }
+  } else if (!want && awakeLock) {
+    const l = awakeLock; awakeLock = null; try { await l.release(); } catch {}
+  }
+  updateAwakeBtn();
+}
+$("awakeBtn").onclick = async () => {
+  const wanted = !awakeOn;
+  awakeOn = wanted; LS.set("awake", awakeOn ? "1" : "0");
+  await applyAwake();
+  if (wanted && awakeOn) status("🔆 Экран не будет гаснуть, пока открыт текст. Чтение не прервётся даже без озвучки заранее.");
+  else if (!wanted) status("Экран снова гаснет как обычно.");
+  renderBgMode();
+};
+document.addEventListener("visibilitychange", () => { if (!document.hidden) applyAwake(); });
+function renderBgMode() {
+  if (awakeOn && $("bgMode").dataset.warn) $("bgMode").textContent = "🔆 Экран не гаснет — чтение не прервётся.";
+}
+
 function panelHead(h, panel) {
   const d = document.createElement("div"); d.className = "card-head";
   const x = document.createElement("button"); x.className = "icon"; x.textContent = "✕"; x.setAttribute("aria-label", "Закрыть");
